@@ -52,13 +52,16 @@ type TaskConfig struct {
 }
 
 type App struct {
-	cfg      Config
-	tasks    map[string]TaskConfig
-	runner   *Runner
-	pageTmpl *template.Template
-	logTmpl  *template.Template
-	logDir   string
-	started  time.Time
+	mu         sync.RWMutex
+	cfg        Config
+	tasks      map[string]TaskConfig
+	configPath string
+	runner     *Runner
+	pageTmpl   *template.Template
+	configTmpl *template.Template
+	logTmpl    *template.Template
+	logDir     string
+	started    time.Time
 }
 
 type Runner struct {
@@ -71,20 +74,21 @@ type Runner struct {
 }
 
 type Run struct {
-	ID          string        `json:"id"`
-	TaskID      string        `json:"task_id"`
-	TaskName    string        `json:"task_name"`
-	Command     string        `json:"command"`
-	LogPath     string        `json:"log_path"`
-	Timeout     time.Duration `json:"timeout"`
-	TimeoutText string        `json:"timeout_text"`
-	Status      string        `json:"status"`
-	RequestedAt time.Time     `json:"requested_at"`
-	StartedAt   time.Time     `json:"started_at"`
-	FinishedAt  time.Time     `json:"finished_at"`
-	CanceledAt  time.Time     `json:"canceled_at"`
-	ExitCode    int           `json:"exit_code"`
-	Error       string        `json:"error,omitempty"`
+	ID           string        `json:"id"`
+	TaskID       string        `json:"task_id"`
+	TaskName     string        `json:"task_name"`
+	Command      string        `json:"command"`
+	TaskSnapshot TaskConfig    `json:"task_snapshot"`
+	LogPath      string        `json:"log_path"`
+	Timeout      time.Duration `json:"timeout"`
+	TimeoutText  string        `json:"timeout_text"`
+	Status       string        `json:"status"`
+	RequestedAt  time.Time     `json:"requested_at"`
+	StartedAt    time.Time     `json:"started_at"`
+	FinishedAt   time.Time     `json:"finished_at"`
+	CanceledAt   time.Time     `json:"canceled_at"`
+	ExitCode     int           `json:"exit_code"`
+	Error        string        `json:"error,omitempty"`
 
 	cancel    context.CancelFunc `json:"-"`
 	done      chan struct{}      `json:"-"`
@@ -92,19 +96,20 @@ type Run struct {
 }
 
 type RunSummary struct {
-	ID          string    `json:"id"`
-	TaskID      string    `json:"task_id"`
-	TaskName    string    `json:"task_name"`
-	Command     string    `json:"command"`
-	LogPath     string    `json:"log_path"`
-	TimeoutText string    `json:"timeout_text"`
-	Status      string    `json:"status"`
-	RequestedAt time.Time `json:"requested_at"`
-	StartedAt   time.Time `json:"started_at"`
-	FinishedAt  time.Time `json:"finished_at"`
-	CanceledAt  time.Time `json:"canceled_at"`
-	ExitCode    int       `json:"exit_code"`
-	Error       string    `json:"error,omitempty"`
+	ID           string     `json:"id"`
+	TaskID       string     `json:"task_id"`
+	TaskName     string     `json:"task_name"`
+	Command      string     `json:"command"`
+	TaskSnapshot TaskConfig `json:"task_snapshot"`
+	LogPath      string     `json:"log_path"`
+	TimeoutText  string     `json:"timeout_text"`
+	Status       string     `json:"status"`
+	RequestedAt  time.Time  `json:"requested_at"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   time.Time  `json:"finished_at"`
+	CanceledAt   time.Time  `json:"canceled_at"`
+	ExitCode     int        `json:"exit_code"`
+	Error        string     `json:"error,omitempty"`
 }
 
 type lockedWriter struct {
@@ -136,26 +141,27 @@ func main() {
 		log.Fatalf("create log dir: %v", err)
 	}
 
-	taskMap := make(map[string]TaskConfig, len(cfg.Tasks))
-	for _, task := range cfg.Tasks {
-		taskMap[task.ID] = task
-	}
+	taskMap := buildTaskMap(cfg.Tasks)
 
 	runner := NewRunner(cfg.Server.LogDir)
 	app := &App{
-		cfg:      cfg,
-		tasks:    taskMap,
-		runner:   runner,
-		pageTmpl: template.Must(template.New("page").Parse(pageTemplate)),
-		logTmpl:  template.Must(template.New("log").Parse(logPageTemplate)),
-		logDir:   cfg.Server.LogDir,
-		started:  time.Now(),
+		cfg:        cfg,
+		tasks:      taskMap,
+		configPath: *configPath,
+		runner:     runner,
+		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
+		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
+		logTmpl:    template.Must(template.New("log").Parse(logPageTemplate)),
+		logDir:     cfg.Server.LogDir,
+		started:    time.Now(),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
+	mux.HandleFunc("/config", app.handleConfigPage)
 	mux.HandleFunc("/runs/", app.handleRunPage)
 	mux.HandleFunc("/api/state", app.handleState)
+	mux.HandleFunc("/api/config", app.handleConfig)
 	mux.HandleFunc("/api/tasks/start", app.handleStart)
 	mux.HandleFunc("/api/runs/", app.handleRunAPI)
 
@@ -168,6 +174,10 @@ func loadConfig(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	return parseConfig(data)
+}
+
+func parseConfig(data []byte) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
@@ -183,12 +193,25 @@ func loadConfig(path string) (Config, error) {
 		if strings.TrimSpace(task.Command) == "" {
 			return Config{}, fmt.Errorf("tasks[%d].command is required", i)
 		}
+		if strings.TrimSpace(task.Timeout) != "" {
+			if _, err := time.ParseDuration(task.Timeout); err != nil {
+				return Config{}, fmt.Errorf("tasks[%d].timeout is invalid: %w", i, err)
+			}
+		}
 		seen[task.ID] = true
 		if task.Name == "" {
 			cfg.Tasks[i].Name = task.ID
 		}
 	}
 	return cfg, nil
+}
+
+func buildTaskMap(tasks []TaskConfig) map[string]TaskConfig {
+	taskMap := make(map[string]TaskConfig, len(tasks))
+	for _, task := range tasks {
+		taskMap[task.ID] = task
+	}
+	return taskMap
 }
 
 func NewRunner(logDir string) *Runner {
@@ -218,17 +241,18 @@ func (r *Runner) Start(task TaskConfig) (*Run, error) {
 
 	id := newRunID()
 	run := &Run{
-		ID:          id,
-		TaskID:      task.ID,
-		TaskName:    task.Name,
-		Command:     task.Command,
-		LogPath:     filepath.Join(r.logDir, id+".log"),
-		Timeout:     timeout,
-		TimeoutText: task.Timeout,
-		Status:      StatusQueued,
-		RequestedAt: time.Now(),
-		ExitCode:    -1,
-		done:        make(chan struct{}),
+		ID:           id,
+		TaskID:       task.ID,
+		TaskName:     task.Name,
+		Command:      task.Command,
+		TaskSnapshot: task,
+		LogPath:      filepath.Join(r.logDir, id+".log"),
+		Timeout:      timeout,
+		TimeoutText:  task.Timeout,
+		Status:       StatusQueued,
+		RequestedAt:  time.Now(),
+		ExitCode:     -1,
+		done:         make(chan struct{}),
 	}
 
 	r.mu.Lock()
@@ -258,6 +282,14 @@ func (r *Runner) loadState() error {
 		if run == nil || run.ID == "" {
 			continue
 		}
+		if run.TaskSnapshot.ID == "" {
+			run.TaskSnapshot = TaskConfig{
+				ID:      run.TaskID,
+				Name:    run.TaskName,
+				Command: run.Command,
+				Timeout: run.TimeoutText,
+			}
+		}
 		run.cancel = nil
 		run.done = make(chan struct{})
 		run.doneClose = sync.Once{}
@@ -285,13 +317,8 @@ func (r *Runner) saveLocked() {
 		log.Printf("marshal run state: %v", err)
 		return
 	}
-	tmp := r.statePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := writeFileAtomic(r.statePath, data, 0644); err != nil {
 		log.Printf("write run state: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, r.statePath); err != nil {
-		log.Printf("replace run state: %v", err)
 	}
 }
 
@@ -506,19 +533,20 @@ func (r *Runner) Find(id string) (*RunSummary, bool) {
 
 func (r *Run) summaryLocked() *RunSummary {
 	return &RunSummary{
-		ID:          r.ID,
-		TaskID:      r.TaskID,
-		TaskName:    r.TaskName,
-		Command:     r.Command,
-		LogPath:     r.LogPath,
-		TimeoutText: r.TimeoutText,
-		Status:      r.Status,
-		RequestedAt: r.RequestedAt,
-		StartedAt:   r.StartedAt,
-		FinishedAt:  r.FinishedAt,
-		CanceledAt:  r.CanceledAt,
-		ExitCode:    r.ExitCode,
-		Error:       r.Error,
+		ID:           r.ID,
+		TaskID:       r.TaskID,
+		TaskName:     r.TaskName,
+		Command:      r.Command,
+		TaskSnapshot: r.TaskSnapshot,
+		LogPath:      r.LogPath,
+		TimeoutText:  r.TimeoutText,
+		Status:       r.Status,
+		RequestedAt:  r.RequestedAt,
+		StartedAt:    r.StartedAt,
+		FinishedAt:   r.FinishedAt,
+		CanceledAt:   r.CanceledAt,
+		ExitCode:     r.ExitCode,
+		Error:        r.Error,
 	}
 }
 
@@ -544,11 +572,15 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	a.mu.RLock()
+	logDir := a.logDir
+	started := a.started.Format(time.RFC3339)
+	a.mu.RUnlock()
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.pageTmpl.Execute(w, map[string]any{
-		"Tasks":   a.cfg.Tasks,
-		"LogDir":  a.logDir,
-		"Started": a.started.Format(time.RFC3339),
+		"LogDir":  logDir,
+		"Started": started,
 	}); err != nil {
 		log.Printf("render page: %v", err)
 	}
@@ -573,10 +605,96 @@ func (a *App) handleRunPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/config" {
+		http.NotFound(w, r)
+		return
+	}
+	a.mu.RLock()
+	started := a.started.Format(time.RFC3339)
+	configPath := a.configPath
+	a.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := a.configTmpl.Execute(w, map[string]any{
+		"ConfigPath": configPath,
+		"Started":    started,
+	}); err != nil {
+		log.Printf("render config page: %v", err)
+	}
+}
+
 func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	tasks := append([]TaskConfig(nil), a.cfg.Tasks...)
+	a.mu.RUnlock()
 	respondJSON(w, map[string]any{
-		"tasks": a.cfg.Tasks,
+		"tasks": tasks,
 		"runs":  a.runner.Snapshot(),
+	})
+}
+
+func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleGetConfig(w, r)
+	case http.MethodPost:
+		a.handleSaveConfig(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (a *App) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	configPath := a.configPath
+	a.mu.RUnlock()
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, map[string]any{
+		"content": string(data),
+	})
+}
+
+func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	content := r.FormValue("content")
+	if content == "" && r.Body != nil {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		content = string(data)
+	}
+	cfg, err := parseConfig([]byte(content))
+	if err != nil {
+		respondJSONStatus(w, http.StatusBadRequest, map[string]any{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	a.mu.RLock()
+	configPath := a.configPath
+	a.mu.RUnlock()
+	if err := writeFileAtomic(configPath, []byte(content), 0644); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	a.mu.Lock()
+	a.cfg = cfg
+	a.tasks = buildTaskMap(cfg.Tasks)
+	a.mu.Unlock()
+
+	respondJSON(w, map[string]any{
+		"ok":    true,
+		"tasks": cfg.Tasks,
 	})
 }
 
@@ -586,7 +704,9 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	taskID := r.FormValue("task_id")
+	a.mu.RLock()
 	task, ok := a.tasks[taskID]
+	a.mu.RUnlock()
 	if !ok {
 		http.Error(w, "unknown task", http.StatusBadRequest)
 		return
@@ -653,10 +773,23 @@ func (a *App) handleLog(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func respondJSON(w http.ResponseWriter, value any) {
+	respondJSONStatus(w, http.StatusOK, value)
+}
+
+func respondJSONStatus(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("write json: %v", err)
 	}
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func newRunID() string {
@@ -758,10 +891,10 @@ const pageTemplate = `<!doctype html>
       line-height: 1.5;
       white-space: nowrap;
     }
-    .task-list, .run-list {
-      display: grid;
-      gap: 10px;
-    }
+	.task-list, .run-list {
+		display: grid;
+		gap: 10px;
+	}
     .task, .run {
       background: #fff;
       border-radius: 8px;
@@ -874,12 +1007,45 @@ const pageTemplate = `<!doctype html>
       min-width: 0;
       overflow-wrap: anywhere;
     }
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-    }
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 12px;
+	}
+	.pager {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		margin-top: 12px;
+	}
+	.page-button {
+		min-width: 34px;
+		padding: 8px 10px;
+		background: #fff;
+		color: #171717;
+	}
+	.page-button.active {
+		background: #171717;
+		color: #fff;
+	}
+	.ellipsis {
+		color: var(--muted);
+		font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		font-size: 12px;
+	}
+	.icon-button {
+		width: 34px;
+		height: 34px;
+		padding: 0;
+		background: #fff;
+		color: #171717;
+	}
+	.icon-button svg {
+		width: 16px;
+		height: 16px;
+	}
     .empty {
       min-height: 112px;
       display: grid;
@@ -918,31 +1084,24 @@ const pageTemplate = `<!doctype html>
 <body>
   <header>
     <h1>Builda</h1>
-    <div class="server-meta">logs {{.LogDir}} · started {{.Started}}</div>
+    <div class="row">
+      <div class="server-meta">logs {{.LogDir}} · started {{.Started}}</div>
+      <a class="button icon-button" href="/config" aria-label="Edit config" title="Edit config">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 20h9"/>
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+        </svg>
+      </a>
+    </div>
   </header>
 
   <main>
     <section>
       <div class="panel-head">
         <h2>Task list</h2>
-        <div class="count">{{len .Tasks}} tasks</div>
+        <div id="task-count" class="count">0 tasks</div>
       </div>
-      <div class="task-list">
-        {{range .Tasks}}
-        <article class="task">
-          <div class="row">
-            <div>
-              <strong>{{.Name}}</strong>
-              <div class="meta">{{.ID}}{{if .Timeout}} · timeout {{.Timeout}}{{end}}</div>
-            </div>
-            <button data-start="{{.ID}}">Run</button>
-          </div>
-          <code>{{.Command}}</code>
-        </article>
-        {{else}}
-        <div class="empty">No tasks configured.</div>
-        {{end}}
-      </div>
+      <div id="tasks" class="task-list"></div>
     </section>
 
     <section>
@@ -951,12 +1110,19 @@ const pageTemplate = `<!doctype html>
         <div id="run-count" class="count">0 runs</div>
       </div>
       <div id="runs" class="run-list"></div>
+      <div id="pager" class="pager"></div>
     </section>
   </main>
 
   <script>
+    const tasksEl = document.querySelector("#tasks");
+    const taskCountEl = document.querySelector("#task-count");
     const runsEl = document.querySelector("#runs");
     const runCountEl = document.querySelector("#run-count");
+    const pagerEl = document.querySelector("#pager");
+    const pageSize = 10;
+    let currentPage = 1;
+    let runTotal = 0;
 
     document.addEventListener("click", async (event) => {
       const start = event.target.closest("[data-start]");
@@ -981,21 +1147,52 @@ const pageTemplate = `<!doctype html>
         await fetch("/api/runs/" + encodeURIComponent(cancel.dataset.cancel) + "/cancel", {method: "POST"});
         await refresh();
       }
+
+      const page = event.target.closest("[data-page]");
+      if (page) {
+        event.preventDefault();
+        currentPage = Number(page.dataset.page);
+        await refresh();
+      }
     });
 
     async function refresh() {
       const response = await fetch("/api/state");
       const state = await response.json();
+      renderTasks(state.tasks || []);
       renderRuns(state.runs || []);
     }
 
+    function renderTasks(tasks) {
+      taskCountEl.textContent = tasks.length + (tasks.length === 1 ? " task" : " tasks");
+      if (!tasks.length) {
+        tasksEl.innerHTML = '<div class="empty">No tasks configured.</div>';
+        return;
+      }
+      tasksEl.innerHTML = tasks.map((task) => {
+        const timeout = task.Timeout ? " · timeout " + escapeHTML(task.Timeout) : "";
+        return '<article class="task">' +
+          '<div class="row"><div><strong>' + escapeHTML(task.Name || task.ID) + '</strong>' +
+          '<div class="meta">' + escapeHTML(task.ID) + timeout + '</div></div>' +
+          '<button data-start="' + escapeHTML(task.ID) + '">Run</button></div>' +
+          '<code>' + escapeHTML(task.Command) + '</code>' +
+          '</article>';
+      }).join("");
+    }
+
     function renderRuns(runs) {
+      runTotal = runs.length;
+      const pageCount = Math.max(1, Math.ceil(runs.length / pageSize));
+      currentPage = Math.min(Math.max(1, currentPage), pageCount);
+      const start = (currentPage - 1) * pageSize;
+      const pageRuns = runs.slice(start, start + pageSize);
       runCountEl.textContent = runs.length + (runs.length === 1 ? " run" : " runs");
+      renderPager(pageCount);
       if (!runs.length) {
         runsEl.innerHTML = '<div class="empty">No runs yet.</div>';
         return;
       }
-      runsEl.innerHTML = runs.map((run) => {
+      runsEl.innerHTML = pageRuns.map((run) => {
         const canCancel = run.status === "QUEUED" || run.status === "RUNNING";
         const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">Cancel</button>' : "";
         return '<article class="run">' +
@@ -1006,6 +1203,34 @@ const pageTemplate = `<!doctype html>
           '<div class="actions"><a class="button secondary" href="/runs/' + encodeURIComponent(run.id) + '">View log</a>' + cancel + '</div>' +
           '</article>';
       }).join("");
+    }
+
+    function renderPager(pageCount) {
+      if (pageCount <= 1) {
+        pagerEl.innerHTML = "";
+        return;
+      }
+      const pages = paginationItems(currentPage, pageCount);
+      const prev = '<button class="page-button" data-page="' + Math.max(1, currentPage - 1) + '" ' + (currentPage === 1 ? "disabled" : "") + '>&lt;</button>';
+      const next = '<button class="page-button" data-page="' + Math.min(pageCount, currentPage + 1) + '" ' + (currentPage === pageCount ? "disabled" : "") + '>&gt;</button>';
+      pagerEl.innerHTML = prev + pages.map((page) => {
+        if (page === "...") return '<span class="ellipsis">...</span>';
+        return '<button class="page-button' + (page === currentPage ? " active" : "") + '" data-page="' + page + '">' + page + '</button>';
+      }).join("") + next;
+    }
+
+    function paginationItems(page, total) {
+      if (total <= 7) return Array.from({length: total}, (_, index) => index + 1);
+      const set = new Set([1, 2, total - 1, total, page - 1, page, page + 1]);
+      const numbers = Array.from(set)
+        .filter((value) => value >= 1 && value <= total)
+        .sort((a, b) => a - b);
+      const items = [];
+      for (const value of numbers) {
+        if (items.length && value - items[items.length - 1] > 1) items.push("...");
+        items.push(value);
+      }
+      return items;
     }
 
     function renderTimes(run) {
@@ -1033,6 +1258,212 @@ const pageTemplate = `<!doctype html>
 
     refresh();
     setInterval(refresh, 1500);
+  </script>
+</body>
+</html>`
+
+const configPageTemplate = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Config · Builda</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --text: #171717;
+      --muted: #4d4d4d;
+      --ring: rgba(0, 0, 0, 0.08) 0px 0px 0px 1px;
+      --card: rgba(0,0,0,0.08) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 2px 2px, rgba(0,0,0,0.04) 0px 8px 8px -8px, #fafafa 0px 0px 0px 1px;
+      --focus: hsla(212, 100%, 48%, 1);
+      --green: #007a55;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #fff;
+      color: var(--text);
+      font-family: Geist, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+      font-feature-settings: "liga";
+    }
+    a { color: inherit; text-decoration: none; }
+    header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 32px;
+      box-shadow: var(--ring);
+      position: sticky;
+      top: 0;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(12px);
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px;
+      display: grid;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.25;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    .button, button {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 6px;
+      background: #171717;
+      color: #fff;
+      box-shadow: var(--ring);
+      font: inherit;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .button.secondary {
+      background: #fff;
+      color: #171717;
+    }
+    .button:focus-visible, button:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    .meta {
+      color: var(--muted);
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .panel {
+      display: grid;
+      gap: 12px;
+    }
+    .panel-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 620px;
+      resize: vertical;
+      padding: 14px;
+      border: 0;
+      border-radius: 8px;
+      box-shadow: var(--card);
+      background: #fff;
+      color: #171717;
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.54;
+    }
+    .editor-status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .editor-status.error {
+      color: #b42318;
+    }
+    .editor-status.ok {
+      color: var(--green);
+    }
+    @media (max-width: 760px) {
+      header {
+        height: auto;
+        min-height: 64px;
+        align-items: start;
+        flex-direction: column;
+        padding: 16px;
+      }
+      main {
+        padding: 16px;
+      }
+      .panel-head {
+        align-items: start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="button secondary" href="/">Back</a>
+    <div class="meta">config {{.ConfigPath}} · started {{.Started}}</div>
+  </header>
+  <main>
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h1>Config editor</h1>
+          <div class="meta">{{.ConfigPath}}</div>
+        </div>
+        <button id="save-config">Save</button>
+      </div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+      <div id="config-status" class="editor-status"></div>
+    </section>
+  </main>
+
+  <script>
+    const configEditorEl = document.querySelector("#config-editor");
+    const configStatusEl = document.querySelector("#config-status");
+    const saveConfigEl = document.querySelector("#save-config");
+
+    saveConfigEl.addEventListener("click", async (event) => {
+      event.preventDefault();
+      await saveConfig();
+    });
+
+    async function loadConfig() {
+      const response = await fetch("/api/config");
+      if (!response.ok) {
+        configStatus("Failed to load config: " + await response.text(), "error");
+        return;
+      }
+      const payload = await response.json();
+      configEditorEl.value = payload.content || "";
+      configStatus("", "");
+    }
+
+    async function saveConfig() {
+      saveConfigEl.disabled = true;
+      configStatus("Validating...", "");
+      try {
+        const body = new URLSearchParams({content: configEditorEl.value});
+        const response = await fetch("/api/config", {method: "POST", body});
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Config save failed.");
+        }
+        configStatus("Saved.", "ok");
+      } catch (error) {
+        configStatus(error.message, "error");
+      } finally {
+        saveConfigEl.disabled = false;
+      }
+    }
+
+    function configStatus(message, type) {
+      configStatusEl.textContent = message;
+      configStatusEl.className = "editor-status" + (type ? " " + type : "");
+    }
+
+    loadConfig();
   </script>
 </body>
 </html>`

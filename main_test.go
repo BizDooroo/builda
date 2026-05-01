@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +38,86 @@ tasks:
 	}
 }
 
+func TestParseConfigRejectsInvalidTimeout(t *testing.T) {
+	_, err := parseConfig([]byte(`
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    timeout: "later"
+`))
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("expected timeout validation error, got %v", err)
+	}
+}
+
+func TestConfigSaveValidatesBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	initial := []byte(`
+tasks:
+  - id: "one"
+    name: "One"
+    command: "echo one"
+`)
+	if err := os.WriteFile(path, initial, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseConfig(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		cfg:        cfg,
+		tasks:      buildTaskMap(cfg.Tasks),
+		configPath: path,
+	}
+
+	invalid := `
+tasks:
+  - id: "one"
+    command: "echo one"
+  - id: "one"
+    command: "echo duplicate"
+`
+	rec := httptest.NewRecorder()
+	req := newConfigSaveRequest(invalid)
+	app.handleConfig(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid config to be rejected, got %d", rec.Code)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(initial) {
+		t.Fatalf("expected invalid config not to be saved, got:\n%s", data)
+	}
+
+	valid := `
+tasks:
+  - id: "two"
+    name: "Two"
+    command: "echo two"
+    timeout: "5s"
+`
+	rec = httptest.NewRecorder()
+	req = newConfigSaveRequest(valid)
+	app.handleConfig(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected valid config to be saved, got %d: %s", rec.Code, rec.Body.String())
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != valid {
+		t.Fatalf("expected valid config to be saved, got:\n%s", data)
+	}
+	if _, ok := app.tasks["two"]; !ok {
+		t.Fatalf("expected in-memory task map to be updated, got %#v", app.tasks)
+	}
+}
+
 func TestRunnerWritesCompletedLog(t *testing.T) {
 	runner := NewRunner(t.TempDir())
 	run, err := runner.Start(TaskConfig{
@@ -63,6 +146,35 @@ func TestRunnerWritesCompletedLog(t *testing.T) {
 	}
 	if runs[0].RequestedAt.IsZero() || runs[0].StartedAt.IsZero() || runs[0].FinishedAt.IsZero() {
 		t.Fatalf("expected request, start, and finish times, got %#v", runs[0])
+	}
+}
+
+func TestRunnerKeepsTaskSnapshot(t *testing.T) {
+	runner := NewRunner(t.TempDir())
+	task := TaskConfig{
+		ID:      "snapshot",
+		Name:    "Original name",
+		Command: "echo original-command",
+		Timeout: "5s",
+	}
+	run, err := runner.Start(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Name = "Changed name"
+	task.Command = "echo changed-command"
+
+	waitForRun(t, run)
+
+	runs := runner.Snapshot()
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %#v", runs)
+	}
+	if runs[0].TaskName != "Original name" || runs[0].Command != "echo original-command" {
+		t.Fatalf("expected run to preserve task snapshot, got %#v", runs[0])
+	}
+	if runs[0].TaskSnapshot.Name != "Original name" || runs[0].TaskSnapshot.Command != "echo original-command" {
+		t.Fatalf("expected explicit task snapshot to be preserved, got %#v", runs[0].TaskSnapshot)
 	}
 }
 
@@ -206,4 +318,11 @@ func waitForRun(t *testing.T, run *Run) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("run did not finish")
 	}
+}
+
+func newConfigSaveRequest(content string) *http.Request {
+	body := url.Values{"content": {content}}.Encode()
+	req := httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
 }
