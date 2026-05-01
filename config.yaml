@@ -1,0 +1,19 @@
+server:
+  address: ":8080"
+  log_dir: "logs"
+
+tasks:
+  - id: "hello"
+    name: "Hello world"
+    command: "echo 'Hello from builda'; sleep 1; date"
+    timeout: "30s"
+
+  - id: "list-files"
+    name: "List repository files"
+    command: "find . -maxdepth 2 -type f | sort"
+    timeout: "30s"
+
+  - id: "slow-count"
+    name: "Slow count"
+    command: "for i in 1 2 3 4 5; do echo count=$i; sleep 1; done"
+    timeout: "10s"
