@@ -1,2 +1,19 @@
 .codex-cc/
 logs/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Go build and test output
+/builda
+*.test
+*.out
+coverage.txt
+coverage.html
+gitleaks-report.*
+
+# Local scratch files
+tmp/
+*.tmp

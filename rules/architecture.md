@@ -1,0 +1,10 @@
+# Architecture Rules
+
+- Keep Builda as a small single-binary Go server unless the user asks for a larger split.
+- `main.go` owns the HTTP server, YAML config loading, runner, templates, and JSON APIs.
+- The runner executes one task at a time. New task starts append `QUEUED` runs, and `dispatchLocked` starts the next queued run only when no run is active.
+- Persist run state in `log_dir/runs.json`. On restart, convert stale `RUNNING` runs to `ABORTED` and resume queued runs.
+- Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
+- Keep task run APIs tied to configured task IDs. Do not accept arbitrary command strings through the run API.
+- Keep log reads confined to the configured log directory and derive log filenames from run IDs.
+- Embedded templates are acceptable for this repository size. If UI grows substantially, split templates only with a clear maintenance benefit.
