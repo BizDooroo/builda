@@ -94,8 +94,21 @@ tasks:
   - id: "hello"
     name: "Hello world"
     description: "Print a greeting"
-    command: "echo hello"
+    command: "echo hello $BUILDA_INPUT_NAME"
     timeout: "30s"
+    inputs:
+      - id: "name"
+        name: "Name"
+        type: "string"
+        default: "world"
+      - id: "environment"
+        name: "Environment"
+        type: "choice"
+        default: "local"
+        options:
+          - "local"
+          - "staging"
+          - "prod"
 ```
 
 Fields:
@@ -107,12 +120,15 @@ Fields:
 - `tasks[].description`: optional short description shown in the task list.
 - `tasks[].command`: shell command executed via `sh -c`.
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
+- `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
+
+Input IDs become environment variables for the command as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. Run inputs are stored with run state, so do not use them for secrets.
 
 ## Web UI
 
-The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the command and API address. Starting a task appends a run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
+The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the command, configured inputs, and API address. If a task has inputs, pressing Run opens a popup for string fields and choice selectors before appending the run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
 
-Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, finish, and cancellation times.
+Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, parameters, finish, and cancellation times.
 
 Open `/runs?task=hello` to show only runs for one task in the run list workspace.
 
@@ -124,6 +140,12 @@ Start a task by ID:
 
 ```bash
 curl -X POST http://localhost:8080/api/tasks/hello/run
+```
+
+Pass configured inputs as query parameters:
+
+```bash
+curl -X POST "http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local"
 ```
 
 Legacy form-compatible start endpoint:

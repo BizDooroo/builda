@@ -7,6 +7,7 @@
 - Resolve relative `server.log_dir` paths from the directory containing the active config file, not from the process working directory.
 - Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
 - Keep task run APIs tied to configured task IDs. Do not accept arbitrary command strings through the run API.
+- Task run inputs must be declared on the task config, validated before queueing, persisted on the run, and passed to commands through `BUILDA_INPUT_*` environment variables.
 - Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
 - Keep log reads confined to the configured log directory and derive log filenames from run IDs.
 - Task API copy controls must work outside Clipboard API secure-context support by keeping a textarea/`execCommand("copy")` fallback.

@@ -45,8 +45,13 @@ tasks:
   - id: "hello"
     name: "Hello world"
     description: "Print a greeting"
-    command: "echo hello"
+    command: "echo hello $BUILDA_INPUT_NAME"
     timeout: "30s"
+    inputs:
+      - id: "name"
+        name: "Name"
+        type: "string"
+        default: "world"
 `
 )
 
@@ -67,11 +72,22 @@ type ServerConfig struct {
 }
 
 type TaskConfig struct {
-	ID          string `yaml:"id"`
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Command     string `yaml:"command"`
-	Timeout     string `yaml:"timeout"`
+	ID          string            `yaml:"id"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Command     string            `yaml:"command"`
+	Timeout     string            `yaml:"timeout"`
+	Inputs      []TaskInputConfig `yaml:"inputs"`
+}
+
+type TaskInputConfig struct {
+	ID          string   `yaml:"id"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Type        string   `yaml:"type"`
+	Default     string   `yaml:"default"`
+	Required    bool     `yaml:"required"`
+	Options     []string `yaml:"options"`
 }
 
 type App struct {
@@ -99,21 +115,22 @@ type Runner struct {
 }
 
 type Run struct {
-	ID           string        `json:"id"`
-	TaskID       string        `json:"task_id"`
-	TaskName     string        `json:"task_name"`
-	Command      string        `json:"command"`
-	TaskSnapshot TaskConfig    `json:"task_snapshot"`
-	LogPath      string        `json:"log_path"`
-	Timeout      time.Duration `json:"timeout"`
-	TimeoutText  string        `json:"timeout_text"`
-	Status       string        `json:"status"`
-	RequestedAt  time.Time     `json:"requested_at"`
-	StartedAt    time.Time     `json:"started_at"`
-	FinishedAt   time.Time     `json:"finished_at"`
-	CanceledAt   time.Time     `json:"canceled_at"`
-	ExitCode     int           `json:"exit_code"`
-	Error        string        `json:"error,omitempty"`
+	ID           string            `json:"id"`
+	TaskID       string            `json:"task_id"`
+	TaskName     string            `json:"task_name"`
+	Command      string            `json:"command"`
+	Inputs       map[string]string `json:"inputs,omitempty"`
+	TaskSnapshot TaskConfig        `json:"task_snapshot"`
+	LogPath      string            `json:"log_path"`
+	Timeout      time.Duration     `json:"timeout"`
+	TimeoutText  string            `json:"timeout_text"`
+	Status       string            `json:"status"`
+	RequestedAt  time.Time         `json:"requested_at"`
+	StartedAt    time.Time         `json:"started_at"`
+	FinishedAt   time.Time         `json:"finished_at"`
+	CanceledAt   time.Time         `json:"canceled_at"`
+	ExitCode     int               `json:"exit_code"`
+	Error        string            `json:"error,omitempty"`
 
 	cancel    context.CancelFunc `json:"-"`
 	done      chan struct{}      `json:"-"`
@@ -121,20 +138,21 @@ type Run struct {
 }
 
 type RunSummary struct {
-	ID           string     `json:"id"`
-	TaskID       string     `json:"task_id"`
-	TaskName     string     `json:"task_name"`
-	Command      string     `json:"command"`
-	TaskSnapshot TaskConfig `json:"task_snapshot"`
-	LogPath      string     `json:"log_path"`
-	TimeoutText  string     `json:"timeout_text"`
-	Status       string     `json:"status"`
-	RequestedAt  time.Time  `json:"requested_at"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   time.Time  `json:"finished_at"`
-	CanceledAt   time.Time  `json:"canceled_at"`
-	ExitCode     int        `json:"exit_code"`
-	Error        string     `json:"error,omitempty"`
+	ID           string            `json:"id"`
+	TaskID       string            `json:"task_id"`
+	TaskName     string            `json:"task_name"`
+	Command      string            `json:"command"`
+	Inputs       map[string]string `json:"inputs,omitempty"`
+	TaskSnapshot TaskConfig        `json:"task_snapshot"`
+	LogPath      string            `json:"log_path"`
+	TimeoutText  string            `json:"timeout_text"`
+	Status       string            `json:"status"`
+	RequestedAt  time.Time         `json:"requested_at"`
+	StartedAt    time.Time         `json:"started_at"`
+	FinishedAt   time.Time         `json:"finished_at"`
+	CanceledAt   time.Time         `json:"canceled_at"`
+	ExitCode     int               `json:"exit_code"`
+	Error        string            `json:"error,omitempty"`
 }
 
 type lockedWriter struct {
@@ -394,6 +412,47 @@ func parseConfig(data []byte) (Config, error) {
 				return Config{}, fmt.Errorf("tasks[%d].timeout is invalid: %w", i, err)
 			}
 		}
+		inputIDs := map[string]bool{}
+		inputEnvs := map[string]string{}
+		for j, input := range task.Inputs {
+			inputID := strings.TrimSpace(input.ID)
+			if inputID == "" {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id is required", i, j)
+			}
+			if !validInputID(inputID) {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id %q must contain only letters, digits, underscores, and hyphens", i, j, inputID)
+			}
+			if inputIDs[inputID] {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id duplicates %q", i, j, inputID)
+			}
+			envName := taskInputEnvName(inputID)
+			if previous, ok := inputEnvs[envName]; ok {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id %q conflicts with %q as %s", i, j, inputID, previous, envName)
+			}
+			inputType, err := normalizeInputType(input.Type)
+			if err != nil {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].type is invalid: %w", i, j, err)
+			}
+			cfg.Tasks[i].Inputs[j].ID = inputID
+			cfg.Tasks[i].Inputs[j].Type = inputType
+			if strings.TrimSpace(input.Name) == "" {
+				cfg.Tasks[i].Inputs[j].Name = inputID
+			}
+			if inputType == "choice" {
+				options, err := normalizeChoiceOptions(input.Options)
+				if err != nil {
+					return Config{}, fmt.Errorf("tasks[%d].inputs[%d].options are invalid: %w", i, j, err)
+				}
+				cfg.Tasks[i].Inputs[j].Options = options
+				if input.Default != "" && !containsString(options, input.Default) {
+					return Config{}, fmt.Errorf("tasks[%d].inputs[%d].default must be one of options", i, j)
+				}
+			} else if len(input.Options) > 0 {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].options are only valid for choice inputs", i, j)
+			}
+			inputIDs[inputID] = true
+			inputEnvs[envName] = inputID
+		}
 		seen[task.ID] = true
 		if task.Name == "" {
 			cfg.Tasks[i].Name = task.ID
@@ -402,12 +461,133 @@ func parseConfig(data []byte) (Config, error) {
 	return cfg, nil
 }
 
+func normalizeInputType(inputType string) (string, error) {
+	inputType = strings.ToLower(strings.TrimSpace(inputType))
+	switch inputType {
+	case "", "string", "input":
+		return "string", nil
+	case "choice":
+		return "choice", nil
+	default:
+		return "", fmt.Errorf("must be string, input, or choice")
+	}
+}
+
+func normalizeChoiceOptions(options []string) ([]string, error) {
+	if len(options) == 0 {
+		return nil, errors.New("choice inputs require at least one option")
+	}
+	normalized := make([]string, 0, len(options))
+	seen := map[string]bool{}
+	for _, option := range options {
+		option = strings.TrimSpace(option)
+		if option == "" {
+			return nil, errors.New("choice options must not be empty")
+		}
+		if seen[option] {
+			return nil, fmt.Errorf("duplicate option %q", option)
+		}
+		seen[option] = true
+		normalized = append(normalized, option)
+	}
+	return normalized, nil
+}
+
+func validInputID(inputID string) bool {
+	if inputID == "" {
+		return false
+	}
+	for _, r := range inputID {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func taskInputEnvName(inputID string) string {
+	var b strings.Builder
+	b.WriteString("BUILDA_INPUT_")
+	for _, r := range inputID {
+		if r == '-' {
+			b.WriteByte('_')
+			continue
+		}
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func buildTaskMap(tasks []TaskConfig) map[string]TaskConfig {
 	taskMap := make(map[string]TaskConfig, len(tasks))
 	for _, task := range tasks {
 		taskMap[task.ID] = task
 	}
 	return taskMap
+}
+
+func collectTaskInputs(task TaskConfig, values url.Values) (map[string]string, error) {
+	allowed := map[string]TaskInputConfig{}
+	for _, input := range task.Inputs {
+		allowed[input.ID] = input
+	}
+	for key := range values {
+		if key == "task_id" {
+			continue
+		}
+		if _, ok := allowed[key]; !ok {
+			return nil, fmt.Errorf("unknown input %q for task %q", key, task.ID)
+		}
+	}
+
+	inputs := make(map[string]string, len(task.Inputs))
+	for _, input := range task.Inputs {
+		value := values.Get(input.ID)
+		if value == "" {
+			value = input.Default
+		}
+		if input.Required && value == "" {
+			return nil, fmt.Errorf("input %q is required", input.ID)
+		}
+		if input.Type == "choice" && value != "" && !containsString(input.Options, value) {
+			return nil, fmt.Errorf("input %q must be one of: %s", input.ID, strings.Join(input.Options, ", "))
+		}
+		inputs[input.ID] = value
+	}
+	return inputs, nil
+}
+
+func cloneInputs(inputs map[string]string) map[string]string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(inputs))
+	for key, value := range inputs {
+		clone[key] = value
+	}
+	return clone
+}
+
+func inputEnv(inputs map[string]string) []string {
+	env := make([]string, 0, len(inputs))
+	for key, value := range inputs {
+		env = append(env, taskInputEnvName(key)+"="+value)
+	}
+	sort.Strings(env)
+	return env
 }
 
 func NewRunner(logDir string) *Runner {
@@ -425,7 +605,7 @@ func NewRunner(logDir string) *Runner {
 	return r
 }
 
-func (r *Runner) Start(task TaskConfig) (*Run, error) {
+func (r *Runner) Start(task TaskConfig, inputs map[string]string) (*Run, error) {
 	timeout := time.Duration(0)
 	if task.Timeout != "" {
 		parsed, err := time.ParseDuration(task.Timeout)
@@ -441,6 +621,7 @@ func (r *Runner) Start(task TaskConfig) (*Run, error) {
 		TaskID:       task.ID,
 		TaskName:     task.Name,
 		Command:      task.Command,
+		Inputs:       cloneInputs(inputs),
 		TaskSnapshot: task,
 		LogPath:      filepath.Join(r.logDir, id+".log"),
 		Timeout:      timeout,
@@ -558,6 +739,7 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	logPath := run.LogPath
 	taskName := run.TaskName
 	command := run.Command
+	inputs := cloneInputs(run.Inputs)
 	startedAt := run.StartedAt
 	r.mu.RUnlock()
 
@@ -572,8 +754,12 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	writeLog(logWriter, "started", startedAt.Format(displayTimeLayout))
 	writeLog(logWriter, "task", taskName)
 	writeLog(logWriter, "command", command)
+	if len(inputs) > 0 {
+		writeLog(logWriter, "params", formatInputLog(inputs))
+	}
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = append(os.Environ(), inputEnv(inputs)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -638,6 +824,14 @@ func copyPrefixed(wg *sync.WaitGroup, writer io.Writer, label string, reader io.
 
 func writeLog(writer io.Writer, label, message string) {
 	fmt.Fprintf(writer, "[%s] %-8s %s\n", time.Now().Format(displayTimeLayout), label, message)
+}
+
+func formatInputLog(inputs map[string]string) string {
+	data, err := json.Marshal(inputs)
+	if err != nil {
+		return fmt.Sprintf("%v", inputs)
+	}
+	return string(data)
 }
 
 func (r *Runner) finish(id string, canceled bool, exitCode int, errText string) {
@@ -747,6 +941,7 @@ func (r *Run) summaryLocked() *RunSummary {
 		TaskID:       r.TaskID,
 		TaskName:     r.TaskName,
 		Command:      r.Command,
+		Inputs:       cloneInputs(r.Inputs),
 		TaskSnapshot: r.TaskSnapshot,
 		LogPath:      r.LogPath,
 		TimeoutText:  r.TimeoutText,
@@ -950,7 +1145,7 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	a.startTask(w, r.FormValue("task_id"))
+	a.startTask(w, r.FormValue("task_id"), r.URL.Query())
 }
 
 func (a *App) handleTaskAPI(w http.ResponseWriter, r *http.Request) {
@@ -973,10 +1168,10 @@ func (a *App) handleTaskAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
-	a.startTask(w, taskID)
+	a.startTask(w, taskID, r.URL.Query())
 }
 
-func (a *App) startTask(w http.ResponseWriter, taskID string) {
+func (a *App) startTask(w http.ResponseWriter, taskID string, values url.Values) {
 	a.mu.RLock()
 	task, ok := a.tasks[taskID]
 	a.mu.RUnlock()
@@ -984,7 +1179,12 @@ func (a *App) startTask(w http.ResponseWriter, taskID string) {
 		http.Error(w, "unknown task", http.StatusBadRequest)
 		return
 	}
-	run, err := a.runner.Start(task)
+	inputs, err := collectTaskInputs(task, values)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	run, err := a.runner.Start(task, inputs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1300,6 +1500,37 @@ const pageTemplate = `<!doctype html>
 		text-align: right;
 		color: #171717;
 	}
+	.input-list {
+		display: grid;
+		gap: 8px;
+	}
+	.input-item {
+		display: grid;
+		gap: 4px;
+		padding: 10px;
+		border-radius: 6px;
+		box-shadow: rgb(235,235,235) 0px 0px 0px 1px;
+		background: #fafafa;
+	}
+	.input-item span {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	.input-title {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		font-size: 13px;
+		line-height: 1.45;
+		font-weight: 600;
+	}
+	.input-meta {
+		color: var(--muted);
+		font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		font-size: 12px;
+		line-height: 1.5;
+	}
     button, .button {
       appearance: none;
       display: inline-flex;
@@ -1334,6 +1565,77 @@ const pageTemplate = `<!doctype html>
       color: #808080;
       background: #fafafa;
       cursor: wait;
+    }
+    input, select {
+      width: 100%;
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 0;
+      border-radius: 6px;
+      box-shadow: rgb(235,235,235) 0px 0px 0px 1px;
+      background: #fff;
+      color: #171717;
+      font: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(0,0,0,.28);
+    }
+    .modal-shell[hidden] {
+      display: none;
+    }
+    .modal {
+      width: min(520px, 100%);
+      display: grid;
+      gap: 16px;
+      padding: 18px;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: rgba(0,0,0,0.20) 0px 12px 48px, rgba(0,0,0,0.12) 0px 0px 0px 1px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .modal-title {
+      min-width: 0;
+    }
+    .modal-title h3 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.3;
+      font-weight: 600;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+    .modal-fields {
+      display: grid;
+      gap: 12px;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+    .field label {
+      font-size: 13px;
+      line-height: 1.45;
+      font-weight: 600;
+    }
+    .field .meta {
+      margin-top: 0;
     }
     .badge {
       display: inline-flex;
@@ -1486,14 +1788,43 @@ const pageTemplate = `<!doctype html>
     </section>
   </main>
 
+  <div id="run-modal" class="modal-shell" hidden>
+    <form id="run-form" class="modal">
+      <div class="modal-head">
+        <div class="modal-title">
+          <h3 id="run-modal-title">Run task</h3>
+          <div id="run-modal-meta" class="meta"></div>
+        </div>
+        <button class="secondary icon-button" type="button" data-close-run-modal aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18"/>
+            <path d="m6 6 12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="run-modal-fields" class="modal-fields"></div>
+      <div class="task-actions">
+        <button class="secondary" type="button" data-close-run-modal>Cancel</button>
+        <button id="run-modal-submit" type="submit">Run</button>
+      </div>
+    </form>
+  </div>
+
   <script>
     const tasksEl = document.querySelector("#tasks");
     const taskCountEl = document.querySelector("#task-count");
     const runsEl = document.querySelector("#runs");
     const runCountEl = document.querySelector("#run-count");
+    const runModalEl = document.querySelector("#run-modal");
+    const runFormEl = document.querySelector("#run-form");
+    const runModalTitleEl = document.querySelector("#run-modal-title");
+    const runModalMetaEl = document.querySelector("#run-modal-meta");
+    const runModalFieldsEl = document.querySelector("#run-modal-fields");
+    const runModalSubmitEl = document.querySelector("#run-modal-submit");
     const latestRunLimit = 10;
     const expandedTasks = new Set();
     let latestTasks = [];
+    let pendingTask = null;
 
     document.addEventListener("click", async (event) => {
       const toggle = event.target.closest("[data-toggle-task]");
@@ -1511,16 +1842,23 @@ const pageTemplate = `<!doctype html>
       const start = event.target.closest("[data-start]");
       if (start) {
         event.preventDefault();
-        start.disabled = true;
-        try {
-          const response = await fetch(taskRunAPI(start.dataset.start), {method: "POST"});
-          if (!response.ok) throw new Error(await response.text());
-          await refresh();
-        } catch (error) {
-          alert(error.message);
-        } finally {
-          start.disabled = false;
+        const task = latestTasks.find((candidate) => candidate.ID === start.dataset.start);
+        if (task && taskInputs(task).length) {
+          openRunModal(task);
+        } else {
+          start.disabled = true;
+          try {
+            await runTask(start.dataset.start, {});
+          } finally {
+            start.disabled = false;
+          }
         }
+      }
+
+      const closeModal = event.target.closest("[data-close-run-modal]");
+      if (closeModal) {
+        event.preventDefault();
+        closeRunModal();
       }
 
       const copy = event.target.closest("[data-copy-api]");
@@ -1547,12 +1885,50 @@ const pageTemplate = `<!doctype html>
 
     });
 
+    runModalEl.addEventListener("click", (event) => {
+      if (event.target === runModalEl) {
+        closeRunModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !runModalEl.hidden) {
+        closeRunModal();
+      }
+    });
+
+    runFormEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!pendingTask) return;
+      const values = Object.fromEntries(new FormData(runFormEl).entries());
+      runModalSubmitEl.disabled = true;
+      try {
+        if (await runTask(pendingTask.ID, values)) {
+          closeRunModal();
+        }
+      } finally {
+        runModalSubmitEl.disabled = false;
+      }
+    });
+
     async function refresh() {
       const response = await fetch("/api/state");
       const state = await response.json();
       latestTasks = state.tasks || [];
       renderTasks(state.tasks || []);
       renderRuns(state.runs || []);
+    }
+
+    async function runTask(taskID, values) {
+      try {
+        const response = await fetch(taskRunAPI(taskID, values), {method: "POST"});
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+        return true;
+      } catch (error) {
+        alert(error.message);
+        return false;
+      }
     }
 
     function renderTasks(tasks) {
@@ -1565,11 +1941,13 @@ const pageTemplate = `<!doctype html>
         const description = task.Description || task.ID;
         const timeout = task.Timeout ? '<div class="detail-line"><span>Timeout</span><span>' + escapeHTML(task.Timeout) + '</span></div>' : "";
         const api = taskRunAPI(task.ID);
+        const inputDetails = renderTaskInputs(task);
         const isExpanded = expandedTasks.has(task.ID);
         const details = isExpanded ? '<div class="task-details">' +
           '<div class="task-description-full"><span>Description</span><span>' + escapeHTML(description) + '</span></div>' +
           '<div class="detail-line"><span>Task ID</span><span>' + escapeHTML(task.ID) + '</span></div>' +
           timeout +
+          inputDetails +
           '<code>' + escapeHTML(task.Command) + '</code>' +
           '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary" data-copy-api="' + escapeHTML(api) + '">Copy</button></div>' +
           '<div class="actions"><a class="button secondary" href="/runs?task=' + encodeURIComponent(task.ID) + '">View runs</a></div>' +
@@ -1585,8 +1963,71 @@ const pageTemplate = `<!doctype html>
       }).join("");
     }
 
-    function taskRunAPI(taskID) {
-      return "/api/tasks/" + encodeURIComponent(taskID) + "/run";
+    function renderTaskInputs(task) {
+      const inputs = taskInputs(task);
+      if (!inputs.length) return "";
+      return '<div class="input-list">' + inputs.map((input) => {
+        const type = input.Type === "choice" ? "choice" : "string";
+        const required = input.Required ? "required" : "optional";
+        const options = type === "choice" ? " · options " + (input.Options || []).join(", ") : "";
+        const description = input.Description ? '<span>' + escapeHTML(input.Description) + '</span>' : "";
+        return '<div class="input-item">' +
+          '<div class="input-title"><span>' + escapeHTML(input.Name || input.ID) + '</span><span class="input-meta">' + escapeHTML(required) + '</span></div>' +
+          '<span class="input-meta">' + escapeHTML(input.ID + " · " + type + options + " · env " + inputEnvName(input.ID)) + '</span>' +
+          description +
+          '</div>';
+      }).join("") + '</div>';
+    }
+
+    function openRunModal(task) {
+      pendingTask = task;
+      runModalTitleEl.textContent = "Run " + (task.Name || task.ID);
+      runModalMetaEl.textContent = task.ID;
+      runModalFieldsEl.innerHTML = taskInputs(task).map(renderRunInputField).join("");
+      runModalEl.hidden = false;
+      const first = runFormEl.querySelector("input, select");
+      if (first) first.focus();
+    }
+
+    function closeRunModal() {
+      pendingTask = null;
+      runFormEl.reset();
+      runModalEl.hidden = true;
+      runModalFieldsEl.innerHTML = "";
+    }
+
+    function renderRunInputField(input) {
+      const id = "input-" + input.ID.replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+      const required = input.Required ? " required" : "";
+      const description = input.Description ? '<div class="meta">' + escapeHTML(input.Description) + '</div>' : "";
+      const label = '<label for="' + escapeHTML(id) + '">' + escapeHTML(input.Name || input.ID) + '</label>';
+      if (input.Type === "choice") {
+        const blank = !input.Required && !input.Default ? '<option value=""></option>' : "";
+        const options = blank + (input.Options || []).map((option) => {
+          const selected = option === input.Default ? " selected" : "";
+          return '<option value="' + escapeHTML(option) + '"' + selected + '>' + escapeHTML(option) + '</option>';
+        }).join("");
+        return '<div class="field">' + label + '<select id="' + escapeHTML(id) + '" name="' + escapeHTML(input.ID) + '"' + required + '>' + options + '</select>' + description + '</div>';
+      }
+      return '<div class="field">' + label + '<input id="' + escapeHTML(id) + '" name="' + escapeHTML(input.ID) + '" value="' + escapeHTML(input.Default || "") + '"' + required + '>' + description + '</div>';
+    }
+
+    function taskInputs(task) {
+      return Array.isArray(task.Inputs) ? task.Inputs : [];
+    }
+
+    function inputEnvName(inputID) {
+      return "BUILDA_INPUT_" + String(inputID).replaceAll("-", "_").toUpperCase();
+    }
+
+    function taskRunAPI(taskID, values = {}) {
+      const path = "/api/tasks/" + encodeURIComponent(taskID) + "/run";
+      const params = new URLSearchParams();
+      Object.entries(values).forEach(([key, value]) => {
+        params.set(key, value);
+      });
+      const query = params.toString();
+      return query ? path + "?" + query : path;
     }
 
     async function copyText(text) {
@@ -2181,7 +2622,9 @@ const runsPageTemplate = `<!doctype html>
         const canCancel = run.status === "QUEUED" || run.status === "RUNNING";
         const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">Cancel</button>' : "";
         summaryEl.innerHTML = '<div class="summary-head"><div class="summary-title"><h2>' + escapeHTML(run.task_name) + '</h2>' +
-          '<div class="meta">' + escapeHTML(run.id) + '</div></div>' +
+          '<div class="meta">' + escapeHTML(run.id) + '</div>' +
+          renderRunParams(run) +
+          '</div>' +
           '<div class="summary-actions"><span class="badge status-' + escapeHTML(run.status) + '">' + escapeHTML(run.status.toLowerCase()) + '</span>' + cancel + '</div></div>' +
           '<div class="kv"><span>Task <b>' + escapeHTML(run.task_id) + '</b></span><span>Exit <b>' + escapeHTML(run.exit_code) + '</b></span></div>' +
           '<code>' + escapeHTML(run.command) + '</code>' +
@@ -2222,6 +2665,21 @@ const runsPageTemplate = `<!doctype html>
         '<span>elapsed ' + formatElapsed(run) + '</span>' +
         '<span>duration ' + formatDuration(run) + '</span>' +
         '</span>';
+    }
+
+    function renderRunParams(run) {
+      const formatted = formatRunParams(run.inputs);
+      if (!formatted) return "";
+      return '<div class="meta">params ' + escapeHTML(formatted) + '</div>';
+    }
+
+    function formatRunParams(inputs) {
+      if (!inputs || typeof inputs !== "object" || !Object.keys(inputs).length) return "";
+      const sorted = {};
+      Object.keys(inputs).sort().forEach((key) => {
+        sorted[key] = inputs[key];
+      });
+      return JSON.stringify(sorted);
     }
 
     function formatElapsed(run) {
@@ -2632,6 +3090,7 @@ const logPageTemplate = `<!doctype html>
         <div>
           <h1>{{.Run.TaskName}}</h1>
           <div class="meta">{{.Run.ID}}</div>
+          <div class="meta" id="params" hidden></div>
         </div>
         <span class="badge" id="badge">{{.Run.Status}}</span>
       </div>
@@ -2655,6 +3114,7 @@ const logPageTemplate = `<!doctype html>
     const startedEl = document.querySelector("#started");
     const finishedEl = document.querySelector("#finished");
     const canceledEl = document.querySelector("#canceled");
+    const paramsEl = document.querySelector("#params");
     let timer = 0;
 
     async function refresh() {
@@ -2670,6 +3130,14 @@ const logPageTemplate = `<!doctype html>
         startedEl.textContent = "start " + formatTime(run.started_at);
         finishedEl.textContent = "finished " + formatTime(run.finished_at);
         canceledEl.textContent = "cancelled " + formatTime(run.canceled_at);
+        const formattedParams = formatRunParams(run.inputs);
+        if (formattedParams) {
+          paramsEl.hidden = false;
+          paramsEl.textContent = "params " + formattedParams;
+        } else {
+          paramsEl.hidden = true;
+          paramsEl.textContent = "";
+        }
         if (run.status !== "QUEUED" && run.status !== "RUNNING" && timer) {
           clearInterval(timer);
           timer = 0;
@@ -2680,6 +3148,15 @@ const logPageTemplate = `<!doctype html>
         logEl.textContent = await logResponse.text();
         if (atBottom) logEl.scrollTop = logEl.scrollHeight;
       }
+    }
+
+    function formatRunParams(inputs) {
+      if (!inputs || typeof inputs !== "object" || !Object.keys(inputs).length) return "";
+      const sorted = {};
+      Object.keys(inputs).sort().forEach((key) => {
+        sorted[key] = inputs[key];
+      });
+      return JSON.stringify(sorted);
     }
 
     function formatTime(value) {

@@ -55,6 +55,102 @@ tasks:
 	}
 }
 
+func TestParseConfigValidatesTaskInputs(t *testing.T) {
+	cfg, err := parseConfig([]byte(`
+tasks:
+  - id: "deploy"
+    command: "echo deploy"
+    inputs:
+      - id: "target"
+        name: "Target"
+        type: "choice"
+        required: true
+        default: "staging"
+        options:
+          - "staging"
+          - "prod"
+      - id: "message"
+        type: "input"
+        default: "hello"
+`))
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if got := cfg.Tasks[0].Inputs[1].Type; got != "string" {
+		t.Fatalf("expected input alias to normalize to string, got %q", got)
+	}
+	if got := cfg.Tasks[0].Inputs[1].Name; got != "message" {
+		t.Fatalf("expected missing input name to default to id, got %q", got)
+	}
+}
+
+func TestParseConfigRejectsInvalidTaskInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "invalid type",
+			body: `
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    inputs:
+      - id: "env"
+        type: "boolean"
+`,
+			want: "type",
+		},
+		{
+			name: "missing choice options",
+			body: `
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    inputs:
+      - id: "env"
+        type: "choice"
+`,
+			want: "options",
+		},
+		{
+			name: "choice default outside options",
+			body: `
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    inputs:
+      - id: "env"
+        type: "choice"
+        default: "prod"
+        options: ["staging"]
+`,
+			want: "default",
+		},
+		{
+			name: "environment conflict",
+			body: `
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    inputs:
+      - id: "target-env"
+      - id: "target_env"
+`,
+			want: "conflicts",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseConfig([]byte(tt.body))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q validation error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestSampleConfigIsValid(t *testing.T) {
 	cfg, err := parseConfig([]byte(sampleConfig))
 	if err != nil {
@@ -252,6 +348,106 @@ func TestTaskRunAPIStartsTask(t *testing.T) {
 	waitForRun(t, active)
 }
 
+func TestTaskRunAPIPassesQueryInputsAsEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "deploy",
+		Name:    "Deploy",
+		Command: `printf 'target=%s message=%s\n' "$BUILDA_INPUT_TARGET" "$BUILDA_INPUT_MESSAGE"`,
+		Timeout: "5s",
+		Inputs: []TaskInputConfig{
+			{
+				ID:       "target",
+				Name:     "Target",
+				Type:     "choice",
+				Required: true,
+				Options:  []string{"staging", "prod"},
+			},
+			{
+				ID:      "message",
+				Name:    "Message",
+				Type:    "string",
+				Default: "default-message",
+			},
+		},
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/deploy/run?target=prod&message=ship", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected task run API to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var run RunSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.Inputs["target"] != "prod" || run.Inputs["message"] != "ship" {
+		t.Fatalf("expected run inputs from query, got %#v", run.Inputs)
+	}
+
+	active := app.runner.byID[run.ID]
+	if active == nil {
+		t.Fatalf("expected run %q to exist", run.ID)
+	}
+	waitForRun(t, active)
+	data, err := os.ReadFile(active.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "target=prod message=ship") {
+		t.Fatalf("expected log to contain input environment values, got:\n%s", data)
+	}
+	if !strings.Contains(string(data), `params   {"message":"ship","target":"prod"}`) {
+		t.Fatalf("expected log to contain run input parameters, got:\n%s", data)
+	}
+}
+
+func TestTaskRunAPIRejectsInvalidQueryInput(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "deploy",
+		Name:    "Deploy",
+		Command: "echo deploy",
+		Timeout: "5s",
+		Inputs: []TaskInputConfig{
+			{
+				ID:       "target",
+				Type:     "choice",
+				Required: true,
+				Options:  []string{"staging", "prod"},
+			},
+		},
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/deploy/run?target=dev", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid choice to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/tasks/deploy/run?target=prod&extra=value", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected unknown input to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestStateAPIFiltersRunsByTaskQuery(t *testing.T) {
 	dir := t.TempDir()
 	first := TaskConfig{
@@ -273,11 +469,11 @@ func TestStateAPIFiltersRunsByTaskQuery(t *testing.T) {
 		logDir: dir,
 	}
 
-	firstRun, err := app.runner.Start(first)
+	firstRun, err := app.runner.Start(first, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondRun, err := app.runner.Start(second)
+	secondRun, err := app.runner.Start(second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +526,50 @@ func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
 	if !strings.Contains(body, `id="run-picker"`) || !strings.Contains(body, `elapsed `) || !strings.Contains(body, `duration `) {
 		t.Fatalf("expected runs page to render mobile picker and timing metadata, got:\n%s", body)
 	}
+	if !strings.Contains(body, `renderRunParams(run)`) || !strings.Contains(body, `formatRunParams(run.inputs)`) {
+		t.Fatalf("expected runs page to render run input params in the summary header, got:\n%s", body)
+	}
+}
+
+func TestRunPageRendersParamsHeaderHook(t *testing.T) {
+	run := &Run{
+		ID:       "run-with-inputs",
+		TaskID:   "deploy",
+		TaskName: "Deploy",
+		Command:  "echo deploy",
+		Inputs: map[string]string{
+			"target": "prod",
+		},
+		Status:   StatusSuccess,
+		ExitCode: 0,
+	}
+	runner := &Runner{
+		byID: map[string]*Run{
+			run.ID: run,
+		},
+	}
+	app := &App{
+		logTmpl:  template.Must(template.New("log").Parse(logPageTemplate)),
+		runner:   runner,
+		hostname: "test-host",
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/runs/"+run.ID, nil)
+	app.handleRunPage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected run page to render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		`id="params"`,
+		`paramsEl.textContent = "params " + formattedParams;`,
+		`function formatRunParams(inputs)`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected run page to include %q, got:\n%s", expected, body)
+		}
+	}
 }
 
 func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
@@ -354,6 +594,9 @@ func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
 		"async function copyText(text)",
 		"document.execCommand(\"copy\")",
 		"window.isSecureContext",
+		"id=\"run-modal\"",
+		"taskRunAPI(taskID, values = {})",
+		"BUILDA_INPUT_",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected index page to include %q, got:\n%s", expected, body)
@@ -368,7 +611,7 @@ func TestRunnerWritesCompletedLog(t *testing.T) {
 		Name:    "Hello",
 		Command: "echo test-output",
 		Timeout: "5s",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +643,7 @@ func TestRunnerKeepsTaskSnapshot(t *testing.T) {
 		Command: "echo original-command",
 		Timeout: "5s",
 	}
-	run, err := runner.Start(task)
+	run, err := runner.Start(task, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +671,7 @@ func TestRunnerCancel(t *testing.T) {
 		Name:    "Slow",
 		Command: "sleep 10",
 		Timeout: "30s",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +697,7 @@ func TestRunnerQueuesOneRunAtATime(t *testing.T) {
 		Name:    "First",
 		Command: "sleep 0.2; echo first",
 		Timeout: "5s",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +706,7 @@ func TestRunnerQueuesOneRunAtATime(t *testing.T) {
 		Name:    "Second",
 		Command: "echo second",
 		Timeout: "5s",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

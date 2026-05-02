@@ -6,8 +6,21 @@ tasks:
   - id: "hello"
     name: "Hello world"
     description: "Print a greeting, wait briefly, and show the current time"
-    command: "echo 'Hello from builda'; sleep 1; date"
+    command: "echo \"Hello ${BUILDA_INPUT_NAME} from ${BUILDA_INPUT_ENVIRONMENT}\"; sleep 1; date"
     timeout: "30s"
+    inputs:
+      - id: "name"
+        name: "Name"
+        type: "string"
+        default: "builda"
+      - id: "environment"
+        name: "Environment"
+        type: "choice"
+        default: "local"
+        options:
+          - "local"
+          - "staging"
+          - "prod"
 
   - id: "list-files"
     name: "List repository files"

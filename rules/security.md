@@ -6,6 +6,8 @@
 - Do not expose a running Builda server to untrusted networks without adding authentication, authorization, CSRF protection, and transport security.
 - The config editor can change commands. Treat `/config` and `/api/config` as administrative surfaces.
 - The task run API must start only existing configured tasks. Never add an endpoint that accepts raw commands from request bodies, query strings, or headers.
+- Query parameters on task run APIs may only provide values for configured task inputs; validate choice values and reject undeclared input names before queueing.
+- Task input values are persisted in run state, written to run logs, and may appear in command output. Do not treat task inputs as a secret transport.
 - Keep the default sample address on loopback-style local operation. If documenting `0.0.0.0`, include an explicit warning about trusted-network use only.
 - The `--addr` flag may be repeated to bind specific interfaces. Document that `--addr` overrides `server.address`, and warn that `:PORT` or `0.0.0.0:PORT` binds broadly.
 - Do not commit secrets, tokens, private keys, local `.env` files, run logs, or command output.
