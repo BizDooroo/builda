@@ -161,6 +161,50 @@ func TestSampleConfigIsValid(t *testing.T) {
 	}
 }
 
+func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "builda", "config.yaml")
+	help := helpText(configPath)
+	for _, want := range []string{
+		"Configuration guide",
+		configPath,
+		"Complete config.yaml example:",
+		"server.address",
+		"server.log_dir",
+		"tasks[].id",
+		"tasks[].command",
+		"tasks[].inputs[].type",
+		"BUILDA_INPUT_TARGET_ENV",
+		"curl -X POST \"http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local\"",
+		"Builda is internal-only software",
+		"builda --print-sample-config",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("expected help text to include %q, got:\n%s", want, help)
+		}
+	}
+
+	example := extractHelpConfigExample(t, help)
+	if _, err := parseConfig([]byte(example)); err != nil {
+		t.Fatalf("help config example must be valid: %v\n%s", err, example)
+	}
+}
+
+func extractHelpConfigExample(t *testing.T, help string) string {
+	t.Helper()
+	start := strings.Index(help, "  server:\n")
+	end := strings.Index(help, "\nField reference:")
+	if start < 0 || end < 0 || end <= start {
+		t.Fatalf("could not find config example in help text:\n%s", help)
+	}
+	lines := strings.Split(help[start:end], "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "  ") {
+			lines[i] = strings.TrimPrefix(line, "  ")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func TestDefaultConfigPathUsesUserConfigDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

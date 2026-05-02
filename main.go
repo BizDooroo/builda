@@ -53,6 +53,127 @@ tasks:
         type: "string"
         default: "world"
 `
+
+	configHelp = `
+Configuration guide
+
+Builda reads a YAML config file. If --config is omitted, Builda creates this
+file when it does not exist:
+
+  %s
+
+Complete config.yaml example:
+
+  server:
+    # Keep Builda on loopback for local use. Binding to ":8080" or
+    # "0.0.0.0:8080" exposes it broadly and is only appropriate on a trusted
+    # private network with additional security controls.
+    address: "127.0.0.1:8080"
+
+    # Relative paths are resolved from the directory containing config.yaml.
+    log_dir: "logs"
+
+  tasks:
+    - id: "hello"
+      name: "Hello world"
+      description: "Print a greeting with run-time inputs"
+      command: "echo \"Hello ${BUILDA_INPUT_NAME} from ${BUILDA_INPUT_ENVIRONMENT}\""
+      timeout: "30s"
+      inputs:
+        - id: "name"
+          name: "Name"
+          description: "Name to print"
+          type: "string"
+          default: "world"
+          required: true
+        - id: "environment"
+          name: "Environment"
+          description: "Deployment-style target selector"
+          type: "choice"
+          default: "local"
+          options:
+            - "local"
+            - "staging"
+            - "prod"
+
+    - id: "list-files"
+      name: "List files"
+      description: "Show repository files"
+      command: "find . -maxdepth 2 -type f | sort"
+      timeout: "10s"
+
+Field reference:
+
+  server.address
+    HTTP listen address. Default is ":8080" when omitted. The --addr flag may
+    be repeated and overrides server.address.
+
+  server.log_dir
+    Directory for run logs and persisted run state. Default is "logs".
+
+  tasks[].id
+    Required unique task ID. Use URL-safe IDs such as "deploy-staging".
+
+  tasks[].name
+    Optional display name. Defaults to tasks[].id.
+
+  tasks[].description
+    Optional short text shown in the Web UI.
+
+  tasks[].command
+    Required shell command executed as: sh -c <command>. Treat every task as
+    privileged shell execution on the host.
+
+  tasks[].timeout
+    Optional Go duration such as "30s", "5m", or "1h".
+
+  tasks[].inputs
+    Optional run-time inputs. Inputs must be declared before callers can pass
+    them as query parameters. Values are persisted in run state, written to run
+    logs, and may appear in command output; do not use inputs for secrets.
+
+  tasks[].inputs[].id
+    Required input ID. Use only letters, digits, underscores, and hyphens.
+    The command receives the value as BUILDA_INPUT_<ID>, with hyphens converted
+    to underscores and letters uppercased. For example, "target-env" becomes
+    BUILDA_INPUT_TARGET_ENV.
+
+  tasks[].inputs[].name
+    Optional display name. Defaults to the input ID.
+
+  tasks[].inputs[].description
+    Optional help text shown next to the input.
+
+  tasks[].inputs[].type
+    "string", "input", or "choice". "input" is accepted as an alias for
+    "string". Omitted type defaults to "string".
+
+  tasks[].inputs[].default
+    Optional default value. For choice inputs, it must be one of options.
+
+  tasks[].inputs[].required
+    Optional boolean. When true, the run request must provide a non-empty value
+    or a non-empty default.
+
+  tasks[].inputs[].options
+    Required for choice inputs and invalid for string inputs. Options must be
+    non-empty and unique.
+
+Run API examples:
+
+  curl -X POST http://localhost:8080/api/tasks/hello/run
+  curl -X POST "http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local"
+
+Security note:
+
+  Builda is internal-only software and is not hardened for untrusted networks.
+  Do not expose it without adding authentication, authorization, CSRF
+  protection, and transport security.
+
+Print only the minimal sample config:
+
+  builda --print-sample-config
+`
 )
 
 var (
@@ -187,6 +308,7 @@ func main() {
 	sampleConfigFlag := flag.Bool("print-sample-config", false, "print a sample configuration file and exit")
 	var addrs addressFlags
 	flag.Var(&addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
+	configureUsage(configPath)
 	flag.Parse()
 	configPathProvided := flagPassed("config")
 
@@ -242,6 +364,21 @@ func main() {
 	}
 
 	log.Fatal(serveHTTP(listenAddrs, app.routes()))
+}
+
+func configureUsage(configPath *string) {
+	flag.Usage = func() {
+		output := flag.CommandLine.Output()
+		fmt.Fprintln(output, "Usage: builda [options]")
+		fmt.Fprintln(output)
+		fmt.Fprintln(output, "Options:")
+		flag.PrintDefaults()
+		fmt.Fprint(output, helpText(*configPath))
+	}
+}
+
+func helpText(configPath string) string {
+	return fmt.Sprintf(configHelp, configPath)
 }
 
 func flagPassed(name string) bool {
