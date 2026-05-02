@@ -32,13 +32,22 @@ Windows binaries are not published by default because Builda executes tasks thro
 
 ## Run
 
+With an installed binary:
+
 ```bash
-go run . -config config.yaml
+builda
 ```
 
 Open `http://localhost:8080`.
 
-When installed as a binary:
+On first run, Builda creates a default config at the operating system's user config location:
+
+- Linux: `$XDG_CONFIG_HOME/builda/config.yaml` or `~/.config/builda/config.yaml`
+- macOS: `~/Library/Application Support/builda/config.yaml`
+
+The sample config uses `server.log_dir: "logs"`, and relative log directories are resolved from the config file directory. With the default config, run logs and `runs.json` are stored under the same Builda config directory, for example `~/.config/builda/logs`.
+
+Run with an explicit config file:
 
 ```bash
 builda -config config.yaml
@@ -54,6 +63,12 @@ Create a starter config:
 
 ```bash
 builda -print-sample-config > config.yaml
+```
+
+During development from this repository, use the checked-in sample config explicitly:
+
+```bash
+go run . -config config.yaml
 ```
 
 Override the configured bind address with `--addr`:
@@ -86,7 +101,7 @@ tasks:
 Fields:
 
 - `server.address`: HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
-- `server.log_dir`: directory for run logs and `runs.json` state.
+- `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
 - `tasks[].description`: optional short description shown in the task list.

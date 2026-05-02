@@ -164,12 +164,13 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 }
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "YAML configuration file")
+	configPath := flag.String("config", defaultConfigPath(), "YAML configuration file")
 	versionFlag := flag.Bool("version", false, "print version information and exit")
 	sampleConfigFlag := flag.Bool("print-sample-config", false, "print a sample configuration file and exit")
 	var addrs addressFlags
 	flag.Var(&addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
 	flag.Parse()
+	configPathProvided := flagPassed("config")
 
 	if *versionFlag {
 		fmt.Println(versionInfo())
@@ -180,6 +181,11 @@ func main() {
 		return
 	}
 
+	if !configPathProvided {
+		if err := ensureDefaultConfig(*configPath); err != nil {
+			log.Fatalf("initialize default config: %v", err)
+		}
+	}
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -191,6 +197,7 @@ func main() {
 	if cfg.Server.LogDir == "" {
 		cfg.Server.LogDir = "logs"
 	}
+	cfg.Server.LogDir = resolveLogDir(*configPath, cfg.Server.LogDir)
 	if err := os.MkdirAll(cfg.Server.LogDir, 0755); err != nil {
 		log.Fatalf("create log dir: %v", err)
 	}
@@ -217,6 +224,51 @@ func main() {
 	}
 
 	log.Fatal(serveHTTP(listenAddrs, app.routes()))
+}
+
+func flagPassed(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+func defaultConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "config.yaml"
+	}
+	return filepath.Join(dir, "builda", "config.yaml")
+}
+
+func ensureDefaultConfig(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, []byte(sampleConfig), 0644)
+}
+
+func resolveLogDir(configPath, logDir string) string {
+	logDir = strings.TrimSpace(logDir)
+	if logDir == "" {
+		logDir = "logs"
+	}
+	if filepath.IsAbs(logDir) {
+		return filepath.Clean(logDir)
+	}
+	base := filepath.Dir(configPath)
+	if strings.TrimSpace(base) == "" || base == "." {
+		return filepath.Clean(logDir)
+	}
+	return filepath.Clean(filepath.Join(base, logDir))
 }
 
 func versionInfo() string {

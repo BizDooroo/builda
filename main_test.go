@@ -65,6 +65,45 @@ func TestSampleConfigIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPathUsesUserConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	want := filepath.Join(dir, "builda", "config.yaml")
+	if got := defaultConfigPath(); got != want {
+		t.Fatalf("defaultConfigPath() = %q, want %q", got, want)
+	}
+}
+
+func TestEnsureDefaultConfigCreatesSample(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "builda", "config.yaml")
+	if err := ensureDefaultConfig(path); err != nil {
+		t.Fatalf("ensureDefaultConfig returned error: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != sampleConfig {
+		t.Fatalf("expected sample config, got:\n%s", data)
+	}
+}
+
+func TestResolveLogDirUsesConfigDirectory(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "builda", "config.yaml")
+	want := filepath.Join(filepath.Dir(configPath), "logs")
+	if got := resolveLogDir(configPath, "logs"); got != want {
+		t.Fatalf("resolveLogDir() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveLogDirKeepsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	if got := resolveLogDir(filepath.Join(t.TempDir(), "config.yaml"), dir); got != dir {
+		t.Fatalf("resolveLogDir() = %q, want %q", got, dir)
+	}
+}
+
 func TestVersionInfoIncludesInjectedVersion(t *testing.T) {
 	oldVersion, oldCommit, oldDate := version, commit, date
 	t.Cleanup(func() {
