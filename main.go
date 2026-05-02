@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"html/template"
 	"io"
@@ -172,7 +171,7 @@ Security note:
 
 Print only the minimal sample config:
 
-  builda --print-sample-config
+  builda sample-config
 `
 )
 
@@ -287,6 +286,10 @@ func (a *addressFlags) String() string {
 	return strings.Join(*a, ",")
 }
 
+func (a *addressFlags) Type() string {
+	return "address"
+}
+
 func (a *addressFlags) Set(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -303,92 +306,10 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 }
 
 func main() {
-	configPath := flag.String("config", defaultConfigPath(), "YAML configuration file")
-	versionFlag := flag.Bool("version", false, "print version information and exit")
-	sampleConfigFlag := flag.Bool("print-sample-config", false, "print a sample configuration file and exit")
-	var addrs addressFlags
-	flag.Var(&addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
-	configureUsage(configPath)
-	flag.Parse()
-	configPathProvided := flagPassed("config")
-
-	if *versionFlag {
-		fmt.Println(versionInfo())
-		return
+	if err := newRootCommand().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	if *sampleConfigFlag {
-		fmt.Print(sampleConfig)
-		return
-	}
-
-	if !configPathProvided {
-		if err := ensureDefaultConfig(*configPath); err != nil {
-			log.Fatalf("initialize default config: %v", err)
-		}
-	}
-	cfg, err := loadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
-	if cfg.Server.Address == "" {
-		cfg.Server.Address = ":8080"
-	}
-	listenAddrs := resolveListenAddresses(cfg.Server.Address, addrs)
-	if cfg.Server.LogDir == "" {
-		cfg.Server.LogDir = "logs"
-	}
-	cfg.Server.LogDir = resolveLogDir(*configPath, cfg.Server.LogDir)
-	if err := os.MkdirAll(cfg.Server.LogDir, 0755); err != nil {
-		log.Fatalf("create log dir: %v", err)
-	}
-
-	taskMap := buildTaskMap(cfg.Tasks)
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "" {
-		hostname = "unknown-host"
-	}
-
-	runner := NewRunner(cfg.Server.LogDir)
-	app := &App{
-		cfg:        cfg,
-		tasks:      taskMap,
-		configPath: *configPath,
-		runner:     runner,
-		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
-		runsTmpl:   template.Must(template.New("runs").Parse(runsPageTemplate)),
-		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
-		logTmpl:    template.Must(template.New("log").Parse(logPageTemplate)),
-		logDir:     cfg.Server.LogDir,
-		hostname:   hostname,
-		started:    time.Now(),
-	}
-
-	log.Fatal(serveHTTP(listenAddrs, app.routes()))
-}
-
-func configureUsage(configPath *string) {
-	flag.Usage = func() {
-		output := flag.CommandLine.Output()
-		fmt.Fprintln(output, "Usage: builda [options]")
-		fmt.Fprintln(output)
-		fmt.Fprintln(output, "Options:")
-		flag.PrintDefaults()
-		fmt.Fprint(output, helpText(*configPath))
-	}
-}
-
-func helpText(configPath string) string {
-	return fmt.Sprintf(configHelp, configPath)
-}
-
-func flagPassed(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
 }
 
 func defaultConfigPath() string {

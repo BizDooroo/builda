@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"html/template"
 	"net/http"
@@ -176,7 +177,7 @@ func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 		"BUILDA_INPUT_TARGET_ENV",
 		"curl -X POST \"http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local\"",
 		"Builda is internal-only software",
-		"builda --print-sample-config",
+		"builda sample-config",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("expected help text to include %q, got:\n%s", want, help)
@@ -259,6 +260,227 @@ func TestVersionInfoIncludesInjectedVersion(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("versionInfo() = %q, want %q", got, want)
 		}
+	}
+}
+
+func TestRootCommandVersion(t *testing.T) {
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("version command returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "builda ") {
+		t.Fatalf("expected version output, got %q", out.String())
+	}
+}
+
+func TestRootCommandSampleConfig(t *testing.T) {
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"sample-config"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("sample-config command returned error: %v", err)
+	}
+	if out.String() != sampleConfig {
+		t.Fatalf("expected sample config, got:\n%s", out.String())
+	}
+}
+
+func TestConfigPathCommandPrintsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	relativePath := filepath.Join(dir, "nested", "config.yaml")
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--config", relativePath, "config", "path"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config path command returned error: %v", err)
+	}
+	want, err := filepath.Abs(relativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != want {
+		t.Fatalf("expected config path %q, got %q", want, out.String())
+	}
+}
+
+func TestConfigGetCreatesAndPrintsDefaultConfig(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	wantPath := filepath.Join(configHome, "builda", "config.yaml")
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"config", "get"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config get command returned error: %v", err)
+	}
+	if out.String() != sampleConfig {
+		t.Fatalf("expected sample config output, got:\n%s", out.String())
+	}
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != sampleConfig {
+		t.Fatalf("expected default config file to be created, got:\n%s", data)
+	}
+}
+
+func TestConfigSetValidatesAndWritesFromStdin(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "builda", "config.yaml")
+	valid := []byte(`
+server:
+  address: "127.0.0.1:9000"
+tasks:
+  - id: "one"
+    command: "echo one"
+`)
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(bytes.NewReader(valid))
+	cmd.SetArgs([]string{"--config", configPath, "config", "set"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config set command returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "updated "+configPath) {
+		t.Fatalf("expected update message for %q, got %q", configPath, out.String())
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(valid) {
+		t.Fatalf("expected config content to be written, got:\n%s", data)
+	}
+
+	invalid := []byte(`
+tasks:
+  - id: "bad"
+`)
+	out.Reset()
+	cmd = newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(bytes.NewReader(invalid))
+	cmd.SetArgs([]string{"--config", configPath, "config", "set"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "invalid config") {
+		t.Fatalf("expected invalid config error, got %v", err)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(valid) {
+		t.Fatalf("expected invalid config not to overwrite file, got:\n%s", data)
+	}
+}
+
+func TestServicePrintLinuxUnit(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--config", filepath.Join(t.TempDir(), "builda config.yaml"),
+		"--addr", "127.0.0.1:9000",
+		"--addr", "127.0.0.1:9001",
+		"service", "print",
+		"--target", "linux",
+		"--binary", "/usr/local/bin/builda",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("service print returned error: %v", err)
+	}
+	body := out.String()
+	for _, want := range []string{
+		"[Unit]",
+		`ExecStart="/usr/local/bin/builda" "serve" "--config"`,
+		`"--addr" "127.0.0.1:9000" "--addr" "127.0.0.1:9001"`,
+		"Restart=always",
+		"WantedBy=default.target",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected service unit to include %q, got:\n%s", want, body)
+		}
+	}
+}
+
+func TestServicePrintLaunchdPlist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--config", filepath.Join(t.TempDir(), "config.yaml"),
+		"service", "print",
+		"--target", "darwin",
+		"--name", "builda.dev",
+		"--binary", "/opt/builda/bin/builda",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("service print returned error: %v", err)
+	}
+	body := out.String()
+	for _, want := range []string{
+		`<string>com.bizdooroo.builda.builda.dev</string>`,
+		`<string>/opt/builda/bin/builda</string>`,
+		`<string>serve</string>`,
+		`<string>--config</string>`,
+		`<key>RunAtLoad</key>`,
+		`<true/>`,
+		filepath.Join(home, "Library", "Logs", "builda.dev.out.log"),
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected launchd plist to include %q, got:\n%s", want, body)
+		}
+	}
+}
+
+func TestServiceInstallDryRunDoesNotCreateConfig(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "missing", "config.yaml")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	var out bytes.Buffer
+	cmd := newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--config", configPath,
+		"service", "install",
+		"--dry-run",
+		"--target", "linux",
+		"--binary", "/usr/local/bin/builda",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("service install --dry-run returned error: %v", err)
+	}
+	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+		t.Fatalf("expected dry-run not to create config, stat err=%v", err)
+	}
+	if !strings.Contains(out.String(), "# "+filepath.Join(home, ".config", "systemd", "user", "builda.service")) {
+		t.Fatalf("expected dry-run output to include service path, got:\n%s", out.String())
 	}
 }
 

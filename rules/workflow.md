@@ -1,6 +1,7 @@
 # Workflow Rules
 
 - Use `rg` for repository search and `gofmt` for Go formatting.
+- Keep the Makefile `fmt` target aligned with every tracked Go source file.
 - Keep Makefile targets simple command wrappers without silent `@` prefixes, echo banners, or help text.
 - Keep commits scoped to one user-visible purpose and stage files explicitly.
 - Preserve unrelated user changes in the worktree.

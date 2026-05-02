@@ -50,36 +50,94 @@ The sample config uses `server.log_dir: "logs"`, and relative log directories ar
 Run with an explicit config file:
 
 ```bash
-builda -config config.yaml
+builda --config config.yaml
 ```
 
 Print the installed version:
 
 ```bash
-builda -version
+builda version
 ```
 
 Create a starter config:
 
 ```bash
-builda -print-sample-config > config.yaml
+builda sample-config > config.yaml
 ```
+
+Print the active config path:
+
+```bash
+builda config path
+builda --config config.yaml config path
+```
+
+Print or replace the active config file:
+
+```bash
+builda config get
+builda --config config.yaml config set new-config.yaml
+cat new-config.yaml | builda --config config.yaml config set
+```
+
+`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file.
 
 During development from this repository, use the checked-in sample config explicitly:
 
 ```bash
-go run . -config config.yaml
+go run . --config config.yaml
 ```
 
 Override the configured bind address with `--addr`:
 
 ```bash
-go run . -config config.yaml --addr :8080
-go run . -config config.yaml --addr 127.0.0.1:8080 --addr 192.168.10.5:8080
-go run . -config config.yaml --addr 0.0.0.0:8080
+go run . --config config.yaml --addr :8080
+go run . --config config.yaml --addr 127.0.0.1:8080 --addr 192.168.10.5:8080
+go run . --config config.yaml --addr 0.0.0.0:8080
 ```
 
 When `--addr` is provided, it overrides `server.address`. Repeat `--addr` to bind only the network interfaces you want.
+
+## Daemon Install
+
+Builda can install itself as a user-level daemon. The install command creates the default config when needed, writes the service definition, enables it, and starts it by default.
+
+Ubuntu 24.04 and other systemd Linux distributions use a systemd user unit:
+
+```bash
+builda service install
+systemctl --user status builda.service
+```
+
+The unit is written to `$XDG_CONFIG_HOME/systemd/user/builda.service` or `~/.config/systemd/user/builda.service`. User services usually start after the user logs in. To allow the service to start at boot before login, enable linger outside Builda:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+macOS uses a launchd LaunchAgent:
+
+```bash
+builda service install
+launchctl print "gui/$(id -u)/com.bizdooroo.builda"
+```
+
+The plist is written to `~/Library/LaunchAgents/com.bizdooroo.builda.plist`.
+
+Useful service commands:
+
+```bash
+builda --config /path/to/config.yaml service install --force
+builda --config /path/to/config.yaml --addr 127.0.0.1:8080 service install
+builda service install --dry-run
+builda service print --target linux
+builda service print --target darwin
+builda service uninstall
+```
+
+Use `--binary /path/to/builda` when installing from a temporary working directory and you want the daemon to keep using a stable binary path. Use `--start=false` to write and enable the service without starting it immediately.
+
+Do not install a daemon that binds to `:PORT` or `0.0.0.0:PORT` unless the machine and network are trusted and protected. Builda is internal-only software and is not hardened for untrusted access.
 
 ## Configuration
 

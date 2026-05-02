@@ -1,7 +1,7 @@
 # Repository Instructions
 
 ## Project Shape
-- Builda is a small Go web task runner in a flat repository: `main.go` contains the server, runner, templates, and API handlers; `main_test.go` contains focused unit and handler tests.
+- Builda is a small Go web task runner in a flat repository: `main.go` contains the server, runner, templates, and API handlers; `cli.go` and `service.go` contain Cobra command setup; `main_test.go` contains focused unit and handler tests.
 - `README.md` is the product/operator overview. `DESIGN.md` is visual design reference for the embedded Web UI.
 
 ## Required Rule Lookup
@@ -11,7 +11,7 @@
 
 ## Essential Commands
 - `go test ./...`
-- `gofmt -w main.go main_test.go`
+- `gofmt -w main.go cli.go service.go main_test.go`
 - `git diff --check`
 - `gitleaks detect --source . --no-banner --redact --verbose`
 
