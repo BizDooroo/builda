@@ -351,6 +351,9 @@ func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
 		"text-overflow: ellipsis",
 		"grid-template-columns: minmax(0, 1fr) auto",
 		"task-description-full",
+		"async function copyText(text)",
+		"document.execCommand(\"copy\")",
+		"window.isSecureContext",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected index page to include %q, got:\n%s", expected, body)

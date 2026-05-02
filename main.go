@@ -1526,7 +1526,16 @@ const pageTemplate = `<!doctype html>
       const copy = event.target.closest("[data-copy-api]");
       if (copy) {
         event.preventDefault();
-        await navigator.clipboard.writeText(window.location.origin + copy.dataset.copyApi);
+        copy.disabled = true;
+        try {
+          await copyText(window.location.origin + copy.dataset.copyApi);
+          flashButtonText(copy, "Copied");
+        } catch (error) {
+          flashButtonText(copy, "Failed");
+          console.error("copy failed", error);
+        } finally {
+          copy.disabled = false;
+        }
       }
 
       const cancel = event.target.closest("[data-cancel]");
@@ -1578,6 +1587,43 @@ const pageTemplate = `<!doctype html>
 
     function taskRunAPI(taskID) {
       return "/api/tasks/" + encodeURIComponent(taskID) + "/run";
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.top = "0";
+      textarea.style.left = "0";
+      textarea.style.width = "1px";
+      textarea.style.height = "1px";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        if (!document.execCommand("copy")) {
+          throw new Error("copy command was rejected");
+        }
+      } finally {
+        textarea.remove();
+      }
+    }
+
+    function flashButtonText(button, text) {
+      const previous = button.textContent;
+      button.textContent = text;
+      setTimeout(() => {
+        if (button.isConnected) {
+          button.textContent = previous;
+        }
+      }, 1200);
     }
 
     function renderRuns(runs) {
