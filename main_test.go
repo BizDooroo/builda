@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,6 +21,7 @@ server:
   address: ":0"
 tasks:
   - id: "one"
+    description: "First task"
     command: "echo one"
 `), 0644)
 	if err != nil {
@@ -35,6 +37,9 @@ tasks:
 	}
 	if cfg.Tasks[0].Name != "one" {
 		t.Fatalf("expected missing name to default to id, got %q", cfg.Tasks[0].Name)
+	}
+	if cfg.Tasks[0].Description != "First task" {
+		t.Fatalf("expected description to be preserved, got %q", cfg.Tasks[0].Description)
 	}
 }
 
@@ -153,6 +158,112 @@ func TestTaskRunAPIStartsTask(t *testing.T) {
 		t.Fatalf("expected run %q to exist", run.ID)
 	}
 	waitForRun(t, active)
+}
+
+func TestStateAPIFiltersRunsByTaskQuery(t *testing.T) {
+	dir := t.TempDir()
+	first := TaskConfig{
+		ID:      "first",
+		Name:    "First",
+		Command: "echo first",
+		Timeout: "5s",
+	}
+	second := TaskConfig{
+		ID:      "second task",
+		Name:    "Second",
+		Command: "echo second",
+		Timeout: "5s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{first, second}},
+		tasks:  buildTaskMap([]TaskConfig{first, second}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	firstRun, err := app.runner.Start(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := app.runner.Start(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, firstRun)
+	waitForRun(t, secondRun)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/state?task="+url.QueryEscape(second.ID), nil)
+	app.handleState(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected state API to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Runs       []RunSummary `json:"runs"`
+		TaskFilter string       `json:"task_filter"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.TaskFilter != second.ID {
+		t.Fatalf("expected task filter %q, got %q", second.ID, payload.TaskFilter)
+	}
+	if len(payload.Runs) != 1 || payload.Runs[0].TaskID != second.ID {
+		t.Fatalf("expected only runs for %q, got %#v", second.ID, payload.Runs)
+	}
+}
+
+func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
+	app := &App{
+		runsTmpl: template.Must(template.New("runs").Parse(runsPageTemplate)),
+		logDir:   "logs",
+		hostname: "test-host",
+		started:  time.Unix(0, 0),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/runs?task=hello", nil)
+	app.handleRunsPage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected runs page to render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "host test-host") {
+		t.Fatalf("expected hostname in header, got:\n%s", body)
+	}
+	if !strings.Contains(body, `const taskFilter = params.get("task") || "";`) {
+		t.Fatalf("expected runs page to support task query filtering, got:\n%s", body)
+	}
+	if !strings.Contains(body, `id="run-picker"`) || !strings.Contains(body, `elapsed `) || !strings.Contains(body, `duration `) {
+		t.Fatalf("expected runs page to render mobile picker and timing metadata, got:\n%s", body)
+	}
+}
+
+func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
+	app := &App{
+		pageTmpl: template.Must(template.New("page").Parse(pageTemplate)),
+		logDir:   "logs",
+		hostname: "test-host",
+		started:  time.Unix(0, 0),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	app.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, expected := range []string{
+		"text-overflow: ellipsis",
+		"grid-template-columns: minmax(0, 1fr) auto",
+		"task-description-full",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected index page to include %q, got:\n%s", expected, body)
+		}
+	}
 }
 
 func TestRunnerWritesCompletedLog(t *testing.T) {

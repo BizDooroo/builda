@@ -33,6 +33,8 @@ const (
 	StatusFailed   = "FAILED"
 	StatusCanceled = "CANCELED"
 	StatusAborted  = "ABORTED"
+
+	displayTimeLayout = "06-01-02 15:04:05"
 )
 
 type Config struct {
@@ -46,10 +48,11 @@ type ServerConfig struct {
 }
 
 type TaskConfig struct {
-	ID      string `yaml:"id"`
-	Name    string `yaml:"name"`
-	Command string `yaml:"command"`
-	Timeout string `yaml:"timeout"`
+	ID          string `yaml:"id"`
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Command     string `yaml:"command"`
+	Timeout     string `yaml:"timeout"`
 }
 
 type App struct {
@@ -59,9 +62,11 @@ type App struct {
 	configPath string
 	runner     *Runner
 	pageTmpl   *template.Template
+	runsTmpl   *template.Template
 	configTmpl *template.Template
 	logTmpl    *template.Template
 	logDir     string
+	hostname   string
 	started    time.Time
 }
 
@@ -143,6 +148,10 @@ func main() {
 	}
 
 	taskMap := buildTaskMap(cfg.Tasks)
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		hostname = "unknown-host"
+	}
 
 	runner := NewRunner(cfg.Server.LogDir)
 	app := &App{
@@ -151,15 +160,18 @@ func main() {
 		configPath: *configPath,
 		runner:     runner,
 		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
+		runsTmpl:   template.Must(template.New("runs").Parse(runsPageTemplate)),
 		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
 		logTmpl:    template.Must(template.New("log").Parse(logPageTemplate)),
 		logDir:     cfg.Server.LogDir,
+		hostname:   hostname,
 		started:    time.Now(),
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", app.handleIndex)
 	mux.HandleFunc("/config", app.handleConfigPage)
+	mux.HandleFunc("/runs", app.handleRunsPage)
 	mux.HandleFunc("/runs/", app.handleRunPage)
 	mux.HandleFunc("/api/state", app.handleState)
 	mux.HandleFunc("/api/config", app.handleConfig)
@@ -375,7 +387,7 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	defer file.Close()
 	logWriter := &lockedWriter{w: file}
 
-	writeLog(logWriter, "started", startedAt.Format(time.RFC3339))
+	writeLog(logWriter, "started", startedAt.Format(displayTimeLayout))
 	writeLog(logWriter, "task", taskName)
 	writeLog(logWriter, "command", command)
 
@@ -424,7 +436,7 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		errText = "task timed out"
 	}
-	writeLog(logWriter, "finished", time.Now().Format(time.RFC3339))
+	writeLog(logWriter, "finished", time.Now().Format(displayTimeLayout))
 	if errText != "" {
 		writeLog(logWriter, "result", errText)
 	}
@@ -443,7 +455,7 @@ func copyPrefixed(wg *sync.WaitGroup, writer io.Writer, label string, reader io.
 }
 
 func writeLog(writer io.Writer, label, message string) {
-	fmt.Fprintf(writer, "[%s] %-8s %s\n", time.Now().Format(time.RFC3339), label, message)
+	fmt.Fprintf(writer, "[%s] %-8s %s\n", time.Now().Format(displayTimeLayout), label, message)
 }
 
 func (r *Runner) finish(id string, canceled bool, exitCode int, errText string) {
@@ -513,8 +525,22 @@ func (r *Runner) Snapshot() []*RunSummary {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	return r.snapshotLocked("")
+}
+
+func (r *Runner) SnapshotByTask(taskID string) []*RunSummary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.snapshotLocked(taskID)
+}
+
+func (r *Runner) snapshotLocked(taskID string) []*RunSummary {
 	runs := make([]*RunSummary, 0, len(r.runs))
 	for _, run := range r.runs {
+		if taskID != "" && run.TaskID != taskID {
+			continue
+		}
 		runs = append(runs, run.summaryLocked())
 	}
 	sort.SliceStable(runs, func(i, j int) bool {
@@ -576,15 +602,38 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.RLock()
 	logDir := a.logDir
-	started := a.started.Format(time.RFC3339)
+	hostname := a.hostname
+	started := a.started.Format(displayTimeLayout)
 	a.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.pageTmpl.Execute(w, map[string]any{
-		"LogDir":  logDir,
-		"Started": started,
+		"Hostname": hostname,
+		"LogDir":   logDir,
+		"Started":  started,
 	}); err != nil {
 		log.Printf("render page: %v", err)
+	}
+}
+
+func (a *App) handleRunsPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/runs" {
+		http.NotFound(w, r)
+		return
+	}
+	a.mu.RLock()
+	logDir := a.logDir
+	hostname := a.hostname
+	started := a.started.Format(displayTimeLayout)
+	a.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := a.runsTmpl.Execute(w, map[string]any{
+		"Hostname": hostname,
+		"LogDir":   logDir,
+		"Started":  started,
+	}); err != nil {
+		log.Printf("render runs page: %v", err)
 	}
 }
 
@@ -599,9 +648,13 @@ func (a *App) handleRunPage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	a.mu.RLock()
+	hostname := a.hostname
+	a.mu.RUnlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.logTmpl.Execute(w, map[string]any{
-		"Run": run,
+		"Hostname": hostname,
+		"Run":      run,
 	}); err != nil {
 		log.Printf("render log page: %v", err)
 	}
@@ -613,12 +666,14 @@ func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.RLock()
-	started := a.started.Format(time.RFC3339)
+	started := a.started.Format(displayTimeLayout)
 	configPath := a.configPath
+	hostname := a.hostname
 	a.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.configTmpl.Execute(w, map[string]any{
+		"Hostname":   hostname,
 		"ConfigPath": configPath,
 		"Started":    started,
 	}); err != nil {
@@ -630,9 +685,17 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	tasks := append([]TaskConfig(nil), a.cfg.Tasks...)
 	a.mu.RUnlock()
+	taskFilter := r.URL.Query().Get("task")
+	var runs []*RunSummary
+	if taskFilter != "" {
+		runs = a.runner.SnapshotByTask(taskFilter)
+	} else {
+		runs = a.runner.Snapshot()
+	}
 	respondJSON(w, map[string]any{
-		"tasks": tasks,
-		"runs":  a.runner.Snapshot(),
+		"tasks":       tasks,
+		"runs":        runs,
+		"task_filter": taskFilter,
 	})
 }
 
@@ -989,6 +1052,72 @@ const pageTemplate = `<!doctype html>
       min-width: 0;
       overflow-wrap: anywhere;
     }
+	.task-copy {
+		min-width: 0;
+	}
+	.task-description {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.task-summary {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+	}
+	.task-description-full {
+		display: grid;
+		gap: 4px;
+		color: var(--muted);
+		font-size: 13px;
+		line-height: 1.45;
+	}
+	.task-description-full span:first-child {
+		font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		font-size: 12px;
+		line-height: 1.5;
+	}
+	.task-description-full span:last-child {
+		color: #171717;
+		overflow-wrap: anywhere;
+	}
+	.task-actions, .run-head-actions {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.task-actions {
+		flex-wrap: nowrap;
+		white-space: nowrap;
+	}
+	.detail-toggle svg {
+		transition: transform .16s ease;
+	}
+	.detail-toggle[aria-expanded="true"] svg {
+		transform: rotate(180deg);
+	}
+	.task-details {
+		display: grid;
+		gap: 10px;
+		margin-top: 12px;
+	}
+	.detail-line {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		color: var(--muted);
+		font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		font-size: 12px;
+		line-height: 1.5;
+	}
+	.detail-line span:last-child {
+		min-width: 0;
+		overflow-wrap: anywhere;
+		text-align: right;
+		color: #171717;
+	}
     button, .button {
       appearance: none;
       display: inline-flex;
@@ -1123,8 +1252,18 @@ const pageTemplate = `<!doctype html>
       .row {
         align-items: start;
       }
+      .task-summary {
+        align-items: center;
+      }
       .times {
         grid-template-columns: 1fr;
+      }
+      .detail-line {
+        display: grid;
+        gap: 2px;
+      }
+      .detail-line span:last-child {
+        text-align: left;
       }
     }
   </style>
@@ -1133,7 +1272,8 @@ const pageTemplate = `<!doctype html>
   <header>
     <h1>Builda</h1>
     <div class="row">
-      <div class="server-meta">logs {{.LogDir}} · started {{.Started}}</div>
+      <div class="server-meta">host {{.Hostname}} · logs {{.LogDir}} · started {{.Started}}</div>
+      <a class="button secondary" href="/runs">Runs</a>
       <a class="button icon-button" href="/config" aria-label="Edit config" title="Edit config">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 20h9"/>
@@ -1146,7 +1286,7 @@ const pageTemplate = `<!doctype html>
   <main>
     <section>
       <div class="panel-head">
-        <h2>Task list</h2>
+        <h2>All tasks</h2>
         <div id="task-count" class="count">0 tasks</div>
       </div>
       <div id="tasks" class="task-list"></div>
@@ -1154,11 +1294,13 @@ const pageTemplate = `<!doctype html>
 
     <section>
       <div class="panel-head">
-        <h2>Run list</h2>
-        <div id="run-count" class="count">0 runs</div>
+        <h2>Latest runs</h2>
+        <div class="run-head-actions">
+          <a class="button secondary" href="/runs">All runs</a>
+          <div id="run-count" class="count">0 runs</div>
+        </div>
       </div>
       <div id="runs" class="run-list"></div>
-      <div id="pager" class="pager"></div>
     </section>
   </main>
 
@@ -1167,12 +1309,23 @@ const pageTemplate = `<!doctype html>
     const taskCountEl = document.querySelector("#task-count");
     const runsEl = document.querySelector("#runs");
     const runCountEl = document.querySelector("#run-count");
-    const pagerEl = document.querySelector("#pager");
-    const pageSize = 10;
-    let currentPage = 1;
-    let runTotal = 0;
+    const latestRunLimit = 10;
+    const expandedTasks = new Set();
+    let latestTasks = [];
 
     document.addEventListener("click", async (event) => {
+      const toggle = event.target.closest("[data-toggle-task]");
+      if (toggle) {
+        event.preventDefault();
+        const taskID = toggle.dataset.toggleTask;
+        if (expandedTasks.has(taskID)) {
+          expandedTasks.delete(taskID);
+        } else {
+          expandedTasks.add(taskID);
+        }
+        renderTasks(latestTasks);
+      }
+
       const start = event.target.closest("[data-start]");
       if (start) {
         event.preventDefault();
@@ -1201,17 +1354,12 @@ const pageTemplate = `<!doctype html>
         await refresh();
       }
 
-      const page = event.target.closest("[data-page]");
-      if (page) {
-        event.preventDefault();
-        currentPage = Number(page.dataset.page);
-        await refresh();
-      }
     });
 
     async function refresh() {
       const response = await fetch("/api/state");
       const state = await response.json();
+      latestTasks = state.tasks || [];
       renderTasks(state.tasks || []);
       renderRuns(state.runs || []);
     }
@@ -1223,14 +1371,25 @@ const pageTemplate = `<!doctype html>
         return;
       }
       tasksEl.innerHTML = tasks.map((task) => {
-        const timeout = task.Timeout ? " · timeout " + escapeHTML(task.Timeout) : "";
+        const description = task.Description || task.ID;
+        const timeout = task.Timeout ? '<div class="detail-line"><span>Timeout</span><span>' + escapeHTML(task.Timeout) + '</span></div>' : "";
         const api = taskRunAPI(task.ID);
-        return '<article class="task">' +
-          '<div class="row"><div><strong>' + escapeHTML(task.Name || task.ID) + '</strong>' +
-          '<div class="meta">' + escapeHTML(task.ID) + timeout + '</div></div>' +
-          '<button data-start="' + escapeHTML(task.ID) + '">Run</button></div>' +
+        const isExpanded = expandedTasks.has(task.ID);
+        const details = isExpanded ? '<div class="task-details">' +
+          '<div class="task-description-full"><span>Description</span><span>' + escapeHTML(description) + '</span></div>' +
+          '<div class="detail-line"><span>Task ID</span><span>' + escapeHTML(task.ID) + '</span></div>' +
+          timeout +
           '<code>' + escapeHTML(task.Command) + '</code>' +
           '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary" data-copy-api="' + escapeHTML(api) + '">Copy</button></div>' +
+          '<div class="actions"><a class="button secondary" href="/runs?task=' + encodeURIComponent(task.ID) + '">View runs</a></div>' +
+          '</div>' : "";
+        return '<article class="task">' +
+          '<div class="row task-summary"><div class="task-copy"><strong>' + escapeHTML(task.Name || task.ID) + '</strong>' +
+          '<div class="meta task-description">' + escapeHTML(description) + '</div></div>' +
+          '<div class="task-actions"><button class="secondary icon-button detail-toggle" data-toggle-task="' + escapeHTML(task.ID) + '" aria-label="' + (isExpanded ? "Hide details" : "Show details") + '" title="' + (isExpanded ? "Hide details" : "Show details") + '" aria-expanded="' + String(isExpanded) + '">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>' +
+          '</button><button data-start="' + escapeHTML(task.ID) + '">Run</button></div></div>' +
+          details +
           '</article>';
       }).join("");
     }
@@ -1240,18 +1399,13 @@ const pageTemplate = `<!doctype html>
     }
 
     function renderRuns(runs) {
-      runTotal = runs.length;
-      const pageCount = Math.max(1, Math.ceil(runs.length / pageSize));
-      currentPage = Math.min(Math.max(1, currentPage), pageCount);
-      const start = (currentPage - 1) * pageSize;
-      const pageRuns = runs.slice(start, start + pageSize);
-      runCountEl.textContent = runs.length + (runs.length === 1 ? " run" : " runs");
-      renderPager(pageCount);
-      if (!runs.length) {
+      const latestRuns = runs.slice(0, latestRunLimit);
+      runCountEl.textContent = latestRuns.length + " latest";
+      if (!latestRuns.length) {
         runsEl.innerHTML = '<div class="empty">No runs yet.</div>';
         return;
       }
-      runsEl.innerHTML = pageRuns.map((run) => {
+      runsEl.innerHTML = latestRuns.map((run) => {
         const canCancel = run.status === "QUEUED" || run.status === "RUNNING";
         const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">Cancel</button>' : "";
         return '<article class="run">' +
@@ -1259,51 +1413,627 @@ const pageTemplate = `<!doctype html>
           '<span class="badge status-' + escapeHTML(run.status) + '">' + escapeHTML(run.status.toLowerCase()) + '</span></div>' +
           '<code>' + escapeHTML(run.command) + '</code>' +
           renderTimes(run) +
-          '<div class="actions"><a class="button secondary" href="/runs/' + encodeURIComponent(run.id) + '">View log</a>' + cancel + '</div>' +
+          '<div class="actions"><a class="button secondary" href="/runs?run=' + encodeURIComponent(run.id) + '">View log</a>' + cancel + '</div>' +
           '</article>';
       }).join("");
-    }
-
-    function renderPager(pageCount) {
-      if (pageCount <= 1) {
-        pagerEl.innerHTML = "";
-        return;
-      }
-      const pages = paginationItems(currentPage, pageCount);
-      const prev = '<button class="page-button" data-page="' + Math.max(1, currentPage - 1) + '" ' + (currentPage === 1 ? "disabled" : "") + '>&lt;</button>';
-      const next = '<button class="page-button" data-page="' + Math.min(pageCount, currentPage + 1) + '" ' + (currentPage === pageCount ? "disabled" : "") + '>&gt;</button>';
-      pagerEl.innerHTML = prev + pages.map((page) => {
-        if (page === "...") return '<span class="ellipsis">...</span>';
-        return '<button class="page-button' + (page === currentPage ? " active" : "") + '" data-page="' + page + '">' + page + '</button>';
-      }).join("") + next;
-    }
-
-    function paginationItems(page, total) {
-      if (total <= 7) return Array.from({length: total}, (_, index) => index + 1);
-      const set = new Set([1, 2, total - 1, total, page - 1, page, page + 1]);
-      const numbers = Array.from(set)
-        .filter((value) => value >= 1 && value <= total)
-        .sort((a, b) => a - b);
-      const items = [];
-      for (const value of numbers) {
-        if (items.length && value - items[items.length - 1] > 1) items.push("...");
-        items.push(value);
-      }
-      return items;
     }
 
     function renderTimes(run) {
       return '<div class="times">' +
         '<span>request ' + formatTime(run.requested_at) + '</span>' +
         '<span>start ' + formatTime(run.started_at) + '</span>' +
-        '<span>finished ' + formatTime(run.finished_at) + '</span>' +
-        '<span>cancelled ' + formatTime(run.canceled_at) + '</span>' +
+        '<span>elapsed ' + formatElapsed(run) + '</span>' +
+        '<span>duration ' + formatDuration(run) + '</span>' +
         '</div>';
     }
 
+    function formatElapsed(run) {
+      if (!hasTime(run.started_at)) return "-";
+      const end = hasTime(run.finished_at) ? new Date(run.finished_at) : new Date();
+      return formatDurationMs(end - new Date(run.started_at));
+    }
+
+    function formatDuration(run) {
+      if (!hasTime(run.started_at) || !hasTime(run.finished_at)) return "-";
+      return formatDurationMs(new Date(run.finished_at) - new Date(run.started_at));
+    }
+
+    function hasTime(value) {
+      return value && !String(value).startsWith("0001-");
+    }
+
+    function formatDurationMs(value) {
+      if (!Number.isFinite(value) || value < 0) return "-";
+      const totalSeconds = Math.floor(value / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes >= 60) {
+        const hours = Math.floor(minutes / 60);
+        return hours + "h " + (minutes % 60) + "m";
+      }
+      if (minutes > 0) return minutes + "m " + seconds + "s";
+      return seconds + "s";
+    }
+
     function formatTime(value) {
-      if (!value || String(value).startsWith("0001-")) return "-";
-      return new Date(value).toLocaleString();
+      if (!hasTime(value)) return "-";
+      const date = new Date(value);
+      const year = String(date.getFullYear()).slice(-2);
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const hour = String(date.getHours()).padStart(2, "0");
+      const minute = String(date.getMinutes()).padStart(2, "0");
+      const second = String(date.getSeconds()).padStart(2, "0");
+      return year + "-" + month + "-" + day + " " + hour + ":" + minute + ":" + second;
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    refresh();
+    setInterval(refresh, 1500);
+  </script>
+</body>
+</html>`
+
+const runsPageTemplate = `<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runs · Builda</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --text: #171717;
+      --muted: #4d4d4d;
+      --faint: #808080;
+      --ring: rgba(0, 0, 0, 0.08) 0px 0px 0px 1px;
+      --card: rgba(0,0,0,0.08) 0px 0px 0px 1px, rgba(0,0,0,0.04) 0px 2px 2px, rgba(0,0,0,0.04) 0px 8px 8px -8px, #fafafa 0px 0px 0px 1px;
+      --focus: hsla(212, 100%, 48%, 1);
+      --blue: #0a72ef;
+      --green: #007a55;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Geist, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+      font-feature-settings: "liga";
+    }
+    a { color: inherit; text-decoration: none; }
+    header {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 32px;
+      box-shadow: var(--ring);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(12px);
+    }
+    h1, h2 {
+      margin: 0;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    h1 {
+      font-size: 24px;
+      line-height: 1.33;
+    }
+    h2 {
+      font-size: 32px;
+      line-height: 1.25;
+    }
+    .server-meta, .meta, .times, .kv, pre {
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    .server-meta, .meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 450px) minmax(0, 1fr);
+      gap: 32px;
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 32px;
+      align-items: start;
+    }
+    .panel-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 16px;
+    }
+    .toolbar {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .run-list {
+      display: grid;
+      gap: 8px;
+    }
+    .run-item {
+      width: 100%;
+      min-height: 74px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #fff;
+      color: inherit;
+      text-align: left;
+      box-shadow: var(--ring);
+      cursor: pointer;
+      transition: transform .16s ease, box-shadow .16s ease;
+    }
+    .run-item:hover, .run-item.active {
+      transform: translateY(-1px);
+      box-shadow: var(--card);
+    }
+    .run-title {
+      min-width: 0;
+    }
+    .run-time-grid {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 12px;
+      color: var(--muted);
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .run-time-grid span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .run-picker {
+      display: none;
+      margin-bottom: 12px;
+    }
+    .run-picker select {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 36px 8px 10px;
+      border: 0;
+      border-radius: 8px;
+      background: #fff;
+      color: #171717;
+      box-shadow: var(--card);
+      font: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .run-picker select:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    strong {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 15px;
+      line-height: 1.45;
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      line-height: 1;
+      font-weight: 500;
+      background: #ebf5ff;
+      color: #0068d6;
+      white-space: nowrap;
+    }
+    .status-RUNNING { color: var(--blue); }
+    .status-QUEUED { color: #666666; background: #fafafa; }
+    .status-SUCCESS { color: var(--green); background: #ecfdf3; }
+    .status-FAILED, .status-CANCELED, .status-ABORTED { color: #b42318; background: #fff1f0; }
+    .button, button {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 6px;
+      background: #171717;
+      color: #fff;
+      box-shadow: var(--ring);
+      font: inherit;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .button.secondary, button.secondary {
+      background: #fff;
+      color: #171717;
+    }
+    button.danger {
+      background: #fff;
+      color: #b42318;
+    }
+    button:focus-visible, .button:focus-visible, .run-item:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+    button:disabled {
+      color: #808080;
+      background: #fafafa;
+      cursor: wait;
+    }
+    .inspector {
+      display: grid;
+      gap: 16px;
+      min-width: 0;
+      position: sticky;
+      top: 96px;
+    }
+    .summary {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: var(--card);
+      background: #fff;
+      min-width: 0;
+    }
+    .summary-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+    }
+    .summary-title {
+      min-width: 0;
+    }
+    .summary-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    code {
+      display: block;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: rgb(235,235,235) 0px 0px 0px 1px;
+      background: #fafafa;
+      color: #171717;
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .times, .kv {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .times span, .kv span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .kv b {
+      color: #171717;
+      font-weight: 500;
+    }
+    pre {
+      margin: 0;
+      min-height: 520px;
+      max-height: calc(100vh - 380px);
+      overflow: auto;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: var(--card);
+      background: #171717;
+      color: #fafafa;
+      font-size: 13px;
+      line-height: 1.54;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .empty {
+      min-height: 160px;
+      display: grid;
+      place-items: center;
+      color: var(--faint);
+      border-radius: 8px;
+      box-shadow: rgb(235,235,235) 0px 0px 0px 1px;
+      font-size: 14px;
+    }
+    @media (max-width: 960px) {
+      header {
+        height: auto;
+        min-height: 64px;
+        align-items: start;
+        flex-direction: column;
+        padding: 16px;
+      }
+      main {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+      h2 {
+        font-size: 28px;
+      }
+      .inspector {
+        position: static;
+      }
+      .summary-head, .panel-head {
+        align-items: start;
+        flex-direction: column;
+      }
+      .times, .kv {
+        grid-template-columns: 1fr;
+      }
+      .run-list {
+        display: none;
+      }
+      .run-picker:not([hidden]) {
+        display: block;
+      }
+      pre {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Builda</h1>
+    <div class="toolbar">
+      <div class="server-meta">host {{.Hostname}} · logs {{.LogDir}} · started {{.Started}}</div>
+      <a class="button secondary" href="/">Tasks</a>
+      <a class="button secondary" href="/config">Config</a>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <div class="panel-head">
+        <div>
+          <h2>Run list</h2>
+          <div id="run-filter" class="meta" hidden></div>
+        </div>
+        <div class="toolbar">
+          <a id="clear-run-filter" class="button secondary" href="/runs" hidden>All runs</a>
+          <div id="run-count" class="meta">0 runs</div>
+        </div>
+      </div>
+      <div id="run-picker" class="run-picker" hidden>
+        <select id="run-select" aria-label="Select run"></select>
+      </div>
+      <div id="runs" class="run-list"></div>
+    </section>
+
+    <section class="inspector">
+      <div id="summary" class="summary">
+        <div class="empty">Select a run.</div>
+      </div>
+      <pre id="log">Select a run to load its log.</pre>
+    </section>
+  </main>
+
+  <script>
+    const runsEl = document.querySelector("#runs");
+    const runCountEl = document.querySelector("#run-count");
+    const runFilterEl = document.querySelector("#run-filter");
+    const clearRunFilterEl = document.querySelector("#clear-run-filter");
+    const runPickerEl = document.querySelector("#run-picker");
+    const runSelectEl = document.querySelector("#run-select");
+    const summaryEl = document.querySelector("#summary");
+    const logEl = document.querySelector("#log");
+    const params = new URLSearchParams(window.location.search);
+    const taskFilter = params.get("task") || "";
+    let selectedRunID = params.get("run") || "";
+    let latestRuns = [];
+
+    document.addEventListener("click", async (event) => {
+      const runButton = event.target.closest("[data-run-id]");
+      if (runButton) {
+        event.preventDefault();
+        selectRun(runButton.dataset.runId, true);
+      }
+
+      const cancel = event.target.closest("[data-cancel]");
+      if (cancel) {
+        event.preventDefault();
+        cancel.disabled = true;
+        await fetch("/api/runs/" + encodeURIComponent(cancel.dataset.cancel) + "/cancel", {method: "POST"});
+        await refresh();
+      }
+    });
+
+    document.addEventListener("change", async (event) => {
+      if (event.target === runSelectEl && runSelectEl.value) {
+        await selectRun(runSelectEl.value, true);
+      }
+    });
+
+    async function refresh() {
+      const stateURL = taskFilter ? "/api/state?task=" + encodeURIComponent(taskFilter) : "/api/state";
+      const response = await fetch(stateURL);
+      const state = await response.json();
+      latestRuns = state.runs || [];
+      if (!latestRuns.length) {
+        renderRuns(latestRuns);
+        summaryEl.innerHTML = '<div class="empty">' + (taskFilter ? "No runs for this task yet." : "No runs yet.") + '</div>';
+        logEl.textContent = taskFilter ? "No runs for this task yet." : "No runs yet.";
+        return;
+      }
+      if (!selectedRunID || !latestRuns.some((run) => run.id === selectedRunID)) {
+        selectedRunID = latestRuns[0].id;
+        updateURL(false);
+      }
+      renderRuns(latestRuns);
+      await renderSelectedRun();
+    }
+
+    function renderRuns(runs) {
+      if (taskFilter) {
+        runFilterEl.hidden = false;
+        runFilterEl.textContent = "task " + taskFilter;
+        clearRunFilterEl.hidden = false;
+      } else {
+        runFilterEl.hidden = true;
+        runFilterEl.textContent = "";
+        clearRunFilterEl.hidden = true;
+      }
+      runCountEl.textContent = runs.length + (runs.length === 1 ? " run" : " runs");
+      if (!runs.length) {
+        runPickerEl.hidden = true;
+        runsEl.innerHTML = '<div class="empty">' + (taskFilter ? "No runs for this task yet." : "No runs yet.") + '</div>';
+        return;
+      }
+      runPickerEl.hidden = false;
+      runSelectEl.innerHTML = runs.map((run) => {
+        return '<option value="' + escapeHTML(run.id) + '"' + (run.id === selectedRunID ? " selected" : "") + '>' +
+          escapeHTML(run.task_name + " · " + run.status.toLowerCase() + " · request " + formatTime(run.requested_at) + " · elapsed " + formatElapsed(run) + " · duration " + formatDuration(run)) +
+          '</option>';
+      }).join("");
+      runsEl.innerHTML = runs.map((run) => {
+        const active = run.id === selectedRunID ? " active" : "";
+        return '<button class="run-item' + active + '" data-run-id="' + escapeHTML(run.id) + '">' +
+          '<span class="run-title"><strong>' + escapeHTML(run.task_name) + '</strong><span class="meta">' + escapeHTML(run.id) + '</span></span>' +
+          '<span class="badge status-' + escapeHTML(run.status) + '">' + escapeHTML(run.status.toLowerCase()) + '</span>' +
+          renderRunListTimes(run) +
+          '</button>';
+      }).join("");
+    }
+
+    async function selectRun(runID, push) {
+      selectedRunID = runID;
+      renderRuns(latestRuns);
+      updateURL(push);
+      await renderSelectedRun();
+    }
+
+    async function renderSelectedRun() {
+      if (!selectedRunID) return;
+      const [runResponse, logResponse] = await Promise.all([
+        fetch("/api/runs/" + encodeURIComponent(selectedRunID)),
+        fetch("/api/runs/" + encodeURIComponent(selectedRunID) + "/log")
+      ]);
+      if (runResponse.ok) {
+        const run = await runResponse.json();
+        const canCancel = run.status === "QUEUED" || run.status === "RUNNING";
+        const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">Cancel</button>' : "";
+        summaryEl.innerHTML = '<div class="summary-head"><div class="summary-title"><h2>' + escapeHTML(run.task_name) + '</h2>' +
+          '<div class="meta">' + escapeHTML(run.id) + '</div></div>' +
+          '<div class="summary-actions"><span class="badge status-' + escapeHTML(run.status) + '">' + escapeHTML(run.status.toLowerCase()) + '</span>' + cancel + '</div></div>' +
+          '<div class="kv"><span>Task <b>' + escapeHTML(run.task_id) + '</b></span><span>Exit <b>' + escapeHTML(run.exit_code) + '</b></span></div>' +
+          '<code>' + escapeHTML(run.command) + '</code>' +
+          renderTimes(run);
+      }
+      if (logResponse.ok) {
+        const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
+        logEl.textContent = await logResponse.text();
+        if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    function updateURL(push) {
+      const next = new URLSearchParams();
+      if (taskFilter) next.set("task", taskFilter);
+      if (selectedRunID) next.set("run", selectedRunID);
+      const url = "/runs" + (next.toString() ? "?" + next.toString() : "");
+      if (push) {
+        history.pushState(null, "", url);
+      } else {
+        history.replaceState(null, "", url);
+      }
+    }
+
+    function renderTimes(run) {
+      return '<div class="times">' +
+        '<span>request ' + formatTime(run.requested_at) + '</span>' +
+        '<span>start ' + formatTime(run.started_at) + '</span>' +
+        '<span>elapsed ' + formatElapsed(run) + '</span>' +
+        '<span>duration ' + formatDuration(run) + '</span>' +
+        '</div>';
+    }
+
+    function renderRunListTimes(run) {
+      return '<span class="run-time-grid">' +
+        '<span>request ' + formatTime(run.requested_at) + '</span>' +
+        '<span>start ' + formatTime(run.started_at) + '</span>' +
+        '<span>elapsed ' + formatElapsed(run) + '</span>' +
+        '<span>duration ' + formatDuration(run) + '</span>' +
+        '</span>';
+    }
+
+    function formatElapsed(run) {
+      if (!hasTime(run.started_at)) return "-";
+      const end = hasTime(run.finished_at) ? new Date(run.finished_at) : new Date();
+      return formatDurationMs(end - new Date(run.started_at));
+    }
+
+    function formatDuration(run) {
+      if (!hasTime(run.started_at) || !hasTime(run.finished_at)) return "-";
+      return formatDurationMs(new Date(run.finished_at) - new Date(run.started_at));
+    }
+
+    function hasTime(value) {
+      return value && !String(value).startsWith("0001-");
+    }
+
+    function formatDurationMs(value) {
+      if (!Number.isFinite(value) || value < 0) return "-";
+      const totalSeconds = Math.floor(value / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes >= 60) {
+        const hours = Math.floor(minutes / 60);
+        return hours + "h " + (minutes % 60) + "m";
+      }
+      if (minutes > 0) return minutes + "m " + seconds + "s";
+      return seconds + "s";
+    }
+
+    function formatTime(value) {
+      if (!hasTime(value)) return "-";
+      const date = new Date(value);
+      const year = String(date.getFullYear()).slice(-2);
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const hour = String(date.getHours()).padStart(2, "0");
+      const minute = String(date.getMinutes()).padStart(2, "0");
+      const second = String(date.getSeconds()).padStart(2, "0");
+      return year + "-" + month + "-" + day + " " + hour + ":" + minute + ":" + second;
     }
 
     function escapeHTML(value) {
@@ -1462,7 +2192,7 @@ const configPageTemplate = `<!doctype html>
 <body>
   <header>
     <a class="button secondary" href="/">Back</a>
-    <div class="meta">config {{.ConfigPath}} · started {{.Started}}</div>
+    <div class="meta">host {{.Hostname}} · config {{.ConfigPath}} · started {{.Started}}</div>
   </header>
   <main>
     <section class="panel">
@@ -1665,8 +2395,8 @@ const logPageTemplate = `<!doctype html>
 </head>
 <body>
   <header>
-    <a class="button" href="/">Back</a>
-    <div class="meta" id="status">{{.Run.Status}}</div>
+    <a class="button" href="/runs?run={{.Run.ID}}">Back</a>
+    <div class="meta">host {{.Hostname}} · <span id="status">{{.Run.Status}}</span></div>
   </header>
   <main>
     <section class="summary">
@@ -1726,7 +2456,14 @@ const logPageTemplate = `<!doctype html>
 
     function formatTime(value) {
       if (!value || String(value).startsWith("0001-")) return "-";
-      return new Date(value).toLocaleString();
+      const date = new Date(value);
+      const year = String(date.getFullYear()).slice(-2);
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const hour = String(date.getHours()).padStart(2, "0");
+      const minute = String(date.getMinutes()).padStart(2, "0");
+      const second = String(date.getSeconds()).padStart(2, "0");
+      return year + "-" + month + "-" + day + " " + hour + ":" + minute + ":" + second;
     }
 
     refresh();

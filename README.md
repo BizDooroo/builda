@@ -30,6 +30,7 @@ server:
 tasks:
   - id: "hello"
     name: "Hello world"
+    description: "Print a greeting"
     command: "echo hello"
     timeout: "30s"
 ```
@@ -40,14 +41,17 @@ Fields:
 - `server.log_dir`: directory for run logs and `runs.json` state.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
+- `tasks[].description`: optional short description shown in the task list.
 - `tasks[].command`: shell command executed via `sh -c`.
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
 
 ## Web UI
 
-The first screen is split into a task list and a run list. Starting a task appends a run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
+The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the command and API address. Starting a task appends a run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
 
-Use **View log** in the run list to open the run log page. Logs refresh while a run is queued or running, and each run records request, start, finish, and cancellation times.
+Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, finish, and cancellation times.
+
+Open `/runs?task=hello` to show only runs for one task in the run list workspace.
 
 The config editor is available at `/config`.
 
@@ -67,7 +71,7 @@ curl -X POST -d task_id=hello http://localhost:8080/api/tasks/start
 
 Other useful endpoints:
 
-- `GET /api/state`: current tasks and run summaries.
+- `GET /api/state`: current tasks and run summaries. Add `?task={taskID}` to return only runs for one task.
 - `GET /api/runs/{runID}`: one run summary.
 - `POST /api/runs/{runID}/cancel`: cancel a queued or running task.
 - `GET /api/runs/{runID}/log`: run log text.

@@ -6,5 +6,6 @@
 - Persist run state in `log_dir/runs.json`. On restart, convert stale `RUNNING` runs to `ABORTED` and resume queued runs.
 - Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
 - Keep task run APIs tied to configured task IDs. Do not accept arbitrary command strings through the run API.
+- Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
 - Keep log reads confined to the configured log directory and derive log filenames from run IDs.
 - Embedded templates are acceptable for this repository size. If UI grows substantially, split templates only with a clear maintenance benefit.
