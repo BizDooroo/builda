@@ -123,6 +123,21 @@ type lockedWriter struct {
 	w  io.Writer
 }
 
+type addressFlags []string
+
+func (a *addressFlags) String() string {
+	return strings.Join(*a, ",")
+}
+
+func (a *addressFlags) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("address must not be empty")
+	}
+	*a = append(*a, value)
+	return nil
+}
+
 func (w *lockedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -131,6 +146,8 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "YAML configuration file")
+	var addrs addressFlags
+	flag.Var(&addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -140,6 +157,7 @@ func main() {
 	if cfg.Server.Address == "" {
 		cfg.Server.Address = ":8080"
 	}
+	listenAddrs := resolveListenAddresses(cfg.Server.Address, addrs)
 	if cfg.Server.LogDir == "" {
 		cfg.Server.LogDir = "logs"
 	}
@@ -168,19 +186,57 @@ func main() {
 		started:    time.Now(),
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", app.handleIndex)
-	mux.HandleFunc("/config", app.handleConfigPage)
-	mux.HandleFunc("/runs", app.handleRunsPage)
-	mux.HandleFunc("/runs/", app.handleRunPage)
-	mux.HandleFunc("/api/state", app.handleState)
-	mux.HandleFunc("/api/config", app.handleConfig)
-	mux.HandleFunc("/api/tasks/start", app.handleStart)
-	mux.HandleFunc("/api/tasks/", app.handleTaskAPI)
-	mux.HandleFunc("/api/runs/", app.handleRunAPI)
+	log.Fatal(serveHTTP(listenAddrs, app.routes()))
+}
 
-	log.Printf("listening on http://localhost%s", cfg.Server.Address)
-	log.Fatal(http.ListenAndServe(cfg.Server.Address, mux))
+func resolveListenAddresses(configAddress string, flagAddresses []string) []string {
+	if len(flagAddresses) == 0 {
+		configAddress = strings.TrimSpace(configAddress)
+		if configAddress == "" {
+			return []string{":8080"}
+		}
+		return []string{configAddress}
+	}
+	addrs := make([]string, 0, len(flagAddresses))
+	seen := map[string]bool{}
+	for _, addr := range flagAddresses {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || seen[addr] {
+			continue
+		}
+		addrs = append(addrs, addr)
+		seen[addr] = true
+	}
+	if len(addrs) == 0 {
+		return []string{":8080"}
+	}
+	return addrs
+}
+
+func serveHTTP(addrs []string, handler http.Handler) error {
+	errCh := make(chan error, len(addrs))
+	for _, addr := range addrs {
+		addr := addr
+		go func() {
+			log.Printf("listening on %s", addr)
+			errCh <- http.ListenAndServe(addr, handler)
+		}()
+	}
+	return <-errCh
+}
+
+func (a *App) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", a.handleIndex)
+	mux.HandleFunc("/config", a.handleConfigPage)
+	mux.HandleFunc("/runs", a.handleRunsPage)
+	mux.HandleFunc("/runs/", a.handleRunPage)
+	mux.HandleFunc("/api/state", a.handleState)
+	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/tasks/start", a.handleStart)
+	mux.HandleFunc("/api/tasks/", a.handleTaskAPI)
+	mux.HandleFunc("/api/runs/", a.handleRunAPI)
+	return mux
 }
 
 func loadConfig(path string) (Config, error) {

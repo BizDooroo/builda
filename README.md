@@ -10,6 +10,8 @@ The repository is safe to publish from a secret-scanning perspective as of the l
 
 Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured commands with `sh -c`, and the Web UI includes a config editor that can change those commands. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
 
+Binding to `:8080` or `0.0.0.0:8080` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
+
 ## Run
 
 ```bash
@@ -17,6 +19,16 @@ go run . -config config.yaml
 ```
 
 Open `http://localhost:8080`.
+
+Override the configured bind address with `--addr`:
+
+```bash
+go run . -config config.yaml --addr :8080
+go run . -config config.yaml --addr 127.0.0.1:8080 --addr 192.168.10.5:8080
+go run . -config config.yaml --addr 0.0.0.0:8080
+```
+
+When `--addr` is provided, it overrides `server.address`. Repeat `--addr` to bind only the network interfaces you want.
 
 ## Configuration
 
@@ -37,7 +49,7 @@ tasks:
 
 Fields:
 
-- `server.address`: HTTP listen address. Keep this local or trusted-network only.
+- `server.address`: HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
 - `server.log_dir`: directory for run logs and `runs.json` state.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
@@ -87,8 +99,5 @@ Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state aft
 ## Development
 
 ```bash
-gofmt -w main.go main_test.go
-go test ./...
-git diff --check
-gitleaks detect --source . --no-banner --redact --verbose
+make fmt lint test build
 ```
