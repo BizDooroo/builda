@@ -1,4 +1,4 @@
-module builda
+module github.com/BizDooroo/builda
 
 go 1.25
 

@@ -12,6 +12,24 @@ Do not expose a running Builda instance to the public internet or any untrusted 
 
 Binding to `:8080` or `0.0.0.0:8080` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
 
+## Install
+
+Install the latest tagged version with Go:
+
+```bash
+go install github.com/BizDooroo/builda@latest
+```
+
+Install a specific version:
+
+```bash
+go install github.com/BizDooroo/builda@v0.1.0
+```
+
+Prebuilt binaries are published on the [GitHub Releases page](https://github.com/BizDooroo/builda/releases) for Linux and macOS on `amd64` and `arm64`. Download the archive for your platform, unpack it, and run the `builda` binary.
+
+Windows binaries are not published by default because Builda executes tasks through `sh -c`; Windows users need a POSIX-compatible shell environment.
+
 ## Run
 
 ```bash
@@ -19,6 +37,24 @@ go run . -config config.yaml
 ```
 
 Open `http://localhost:8080`.
+
+When installed as a binary:
+
+```bash
+builda -config config.yaml
+```
+
+Print the installed version:
+
+```bash
+builda -version
+```
+
+Create a starter config:
+
+```bash
+builda -print-sample-config > config.yaml
+```
 
 Override the configured bind address with `--addr`:
 
@@ -36,7 +72,7 @@ Tasks are managed in YAML:
 
 ```yaml
 server:
-  address: ":8080"
+  address: "127.0.0.1:8080"
   log_dir: "logs"
 
 tasks:
@@ -100,4 +136,23 @@ Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state aft
 
 ```bash
 make fmt lint test build
+```
+
+## Release
+
+Releases are tag-driven. Push a semantic version tag to build and publish GitHub Release assets:
+
+```bash
+git tag -a v0.1.0 -m "builda v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow runs tests, builds Linux and macOS archives with GoReleaser, uploads `checksums.txt`, and generates GitHub artifact attestations for the release artifacts.
+
+Before publishing a release, run:
+
+```bash
+go test ./...
+git diff --check
+gitleaks detect --source . --no-banner --redact --verbose
 ```

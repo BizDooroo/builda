@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +36,24 @@ const (
 	StatusAborted  = "ABORTED"
 
 	displayTimeLayout = "06-01-02 15:04:05"
+
+	sampleConfig = `server:
+  address: "127.0.0.1:8080"
+  log_dir: "logs"
+
+tasks:
+  - id: "hello"
+    name: "Hello world"
+    description: "Print a greeting"
+    command: "echo hello"
+    timeout: "30s"
+`
+)
+
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
 )
 
 type Config struct {
@@ -146,9 +165,20 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "YAML configuration file")
+	versionFlag := flag.Bool("version", false, "print version information and exit")
+	sampleConfigFlag := flag.Bool("print-sample-config", false, "print a sample configuration file and exit")
 	var addrs addressFlags
 	flag.Var(&addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(versionInfo())
+		return
+	}
+	if *sampleConfigFlag {
+		fmt.Print(sampleConfig)
+		return
+	}
 
 	cfg, err := loadConfig(*configPath)
 	if err != nil {
@@ -187,6 +217,50 @@ func main() {
 	}
 
 	log.Fatal(serveHTTP(listenAddrs, app.routes()))
+}
+
+func versionInfo() string {
+	v := strings.TrimSpace(version)
+	rev := strings.TrimSpace(commit)
+	built := strings.TrimSpace(date)
+	modified := ""
+
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if (v == "" || v == "dev") && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			v = info.Main.Version
+		}
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if rev == "" {
+					rev = setting.Value
+				}
+			case "vcs.time":
+				if built == "" {
+					built = setting.Value
+				}
+			case "vcs.modified":
+				if setting.Value == "true" {
+					modified = " dirty"
+				}
+			}
+		}
+	}
+
+	if v == "" {
+		v = "dev"
+	}
+	parts := []string{"builda " + v}
+	if rev != "" {
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+		parts = append(parts, "commit "+rev+modified)
+	}
+	if built != "" {
+		parts = append(parts, "built "+built)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func resolveListenAddresses(configAddress string, flagAddresses []string) []string {

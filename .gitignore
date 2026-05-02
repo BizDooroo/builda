@@ -8,6 +8,7 @@ logs/
 
 # Go build and test output
 /builda
+dist/
 *.test
 *.out
 coverage.txt

@@ -8,3 +8,6 @@
 - Do not commit generated logs from `log_dir`, local binaries, coverage output, or gitleaks reports.
 - Update `README.md` when API shape, operator workflow, or security posture changes.
 - Keep `AGENTS.md` short and move durable project guidance into `rules/`.
+- Public releases are tag-driven from SemVer tags like `v0.1.0`; the GitHub Actions release workflow owns GoReleaser publishing.
+- Keep GoReleaser output in ignored `dist/`, and do not commit release archives, checksums generated locally, or attestation output.
+- Keep `go.mod` aligned with the public GitHub module path so `go install github.com/BizDooroo/builda@latest` works.

@@ -55,6 +55,34 @@ tasks:
 	}
 }
 
+func TestSampleConfigIsValid(t *testing.T) {
+	cfg, err := parseConfig([]byte(sampleConfig))
+	if err != nil {
+		t.Fatalf("sample config must be valid: %v", err)
+	}
+	if len(cfg.Tasks) == 0 {
+		t.Fatal("sample config should include at least one task")
+	}
+}
+
+func TestVersionInfoIncludesInjectedVersion(t *testing.T) {
+	oldVersion, oldCommit, oldDate := version, commit, date
+	t.Cleanup(func() {
+		version, commit, date = oldVersion, oldCommit, oldDate
+	})
+
+	version = "v1.2.3"
+	commit = "1234567890abcdef"
+	date = "2026-05-02T00:00:00Z"
+
+	got := versionInfo()
+	for _, want := range []string{"builda v1.2.3", "commit 1234567890ab", "built 2026-05-02T00:00:00Z"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("versionInfo() = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestResolveListenAddressesUsesConfigByDefault(t *testing.T) {
 	addrs := resolveListenAddresses("127.0.0.1:9000", nil)
 	if len(addrs) != 1 || addrs[0] != "127.0.0.1:9000" {
