@@ -37,7 +37,7 @@ const (
 	displayTimeLayout = "06-01-02 15:04:05"
 
 	sampleConfig = `server:
-  address: "127.0.0.1:8080"
+  address: "127.0.0.1:28088"
   log_dir: "logs"
 
 tasks:
@@ -64,10 +64,10 @@ file when it does not exist:
 Complete config.yaml example:
 
   server:
-    # Keep Builda on loopback for local use. Binding to ":8080" or
-    # "0.0.0.0:8080" exposes it broadly and is only appropriate on a trusted
+    # Keep Builda on loopback for local use. Binding to ":28088" or
+    # "0.0.0.0:28088" exposes it broadly and is only appropriate on a trusted
     # private network with additional security controls.
-    address: "127.0.0.1:8080"
+    address: "127.0.0.1:28088"
 
     # Relative paths are resolved from the directory containing config.yaml.
     log_dir: "logs"
@@ -104,7 +104,7 @@ Complete config.yaml example:
 Field reference:
 
   server.address
-    HTTP listen address. Default is ":8080" when omitted. The --addr flag may
+    HTTP listen address. Default is ":28088" when omitted. The --addr flag may
     be repeated and overrides server.address.
 
   server.log_dir
@@ -160,8 +160,8 @@ Field reference:
 
 Run API examples:
 
-  curl -X POST http://localhost:8080/api/tasks/hello/run
-  curl -X POST "http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local"
+  curl -X POST http://localhost:28088/api/tasks/hello/run
+  curl -X POST "http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local"
 
 Security note:
 
@@ -395,7 +395,7 @@ func resolveListenAddresses(configAddress string, flagAddresses []string) []stri
 	if len(flagAddresses) == 0 {
 		configAddress = strings.TrimSpace(configAddress)
 		if configAddress == "" {
-			return []string{":8080"}
+			return []string{":28088"}
 		}
 		return []string{configAddress}
 	}
@@ -410,7 +410,7 @@ func resolveListenAddresses(configAddress string, flagAddresses []string) []stri
 		seen[addr] = true
 	}
 	if len(addrs) == 0 {
-		return []string{":8080"}
+		return []string{":28088"}
 	}
 	return addrs
 }

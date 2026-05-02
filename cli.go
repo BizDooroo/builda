@@ -187,7 +187,7 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	if cfg.Server.Address == "" {
-		cfg.Server.Address = ":8080"
+		cfg.Server.Address = ":28088"
 	}
 	listenAddrs := resolveListenAddresses(cfg.Server.Address, addrs)
 	if cfg.Server.LogDir == "" {

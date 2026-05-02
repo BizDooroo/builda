@@ -10,7 +10,7 @@ The repository is safe to publish from a secret-scanning perspective as of the l
 
 Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured commands with `sh -c`, and the Web UI includes a config editor that can change those commands. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
 
-Binding to `:8080` or `0.0.0.0:8080` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
+Binding to `:28088` or `0.0.0.0:28088` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
 
 ## Install
 
@@ -38,7 +38,7 @@ With an installed binary:
 builda
 ```
 
-Open `http://localhost:8080`.
+Open `http://localhost:28088`.
 
 On first run, Builda creates a default config at the operating system's user config location:
 
@@ -91,9 +91,9 @@ go run . --config config.yaml
 Override the configured bind address with `--addr`:
 
 ```bash
-go run . --config config.yaml --addr :8080
-go run . --config config.yaml --addr 127.0.0.1:8080 --addr 192.168.10.5:8080
-go run . --config config.yaml --addr 0.0.0.0:8080
+go run . --config config.yaml --addr :28088
+go run . --config config.yaml --addr 127.0.0.1:28088 --addr 192.168.10.5:28088
+go run . --config config.yaml --addr 0.0.0.0:28088
 ```
 
 When `--addr` is provided, it overrides `server.address`. Repeat `--addr` to bind only the network interfaces you want.
@@ -128,7 +128,7 @@ Useful service commands:
 
 ```bash
 builda --config /path/to/config.yaml service install --force
-builda --config /path/to/config.yaml --addr 127.0.0.1:8080 service install
+builda --config /path/to/config.yaml --addr 127.0.0.1:28088 service install
 builda service install --dry-run
 builda service print --target linux
 builda service print --target darwin
@@ -145,7 +145,7 @@ Tasks are managed in YAML:
 
 ```yaml
 server:
-  address: "127.0.0.1:8080"
+  address: "127.0.0.1:28088"
   log_dir: "logs"
 
 tasks:
@@ -197,19 +197,19 @@ The config editor is available at `/config`.
 Start a task by ID:
 
 ```bash
-curl -X POST http://localhost:8080/api/tasks/hello/run
+curl -X POST http://localhost:28088/api/tasks/hello/run
 ```
 
 Pass configured inputs as query parameters:
 
 ```bash
-curl -X POST "http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local"
+curl -X POST "http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local"
 ```
 
 Legacy form-compatible start endpoint:
 
 ```bash
-curl -X POST -d task_id=hello http://localhost:8080/api/tasks/start
+curl -X POST -d task_id=hello http://localhost:28088/api/tasks/start
 ```
 
 Other useful endpoints:

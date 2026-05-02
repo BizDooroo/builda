@@ -1,5 +1,5 @@
 server:
-  address: "127.0.0.1:8080"
+  address: "127.0.0.1:28088"
   log_dir: "logs"
 
 tasks:

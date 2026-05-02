@@ -175,7 +175,7 @@ func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 		"tasks[].command",
 		"tasks[].inputs[].type",
 		"BUILDA_INPUT_TARGET_ENV",
-		"curl -X POST \"http://localhost:8080/api/tasks/hello/run?name=Builda&environment=local\"",
+		"curl -X POST \"http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local\"",
 		"Builda is internal-only software",
 		"builda sample-config",
 	} {
@@ -491,14 +491,14 @@ func TestResolveListenAddressesUsesConfigByDefault(t *testing.T) {
 	}
 
 	addrs = resolveListenAddresses("", nil)
-	if len(addrs) != 1 || addrs[0] != ":8080" {
+	if len(addrs) != 1 || addrs[0] != ":28088" {
 		t.Fatalf("expected fallback address, got %#v", addrs)
 	}
 }
 
 func TestResolveListenAddressesUsesRepeatedFlags(t *testing.T) {
-	addrs := resolveListenAddresses(":8080", []string{"127.0.0.1:8080", "0.0.0.0:8080", "127.0.0.1:8080"})
-	want := []string{"127.0.0.1:8080", "0.0.0.0:8080"}
+	addrs := resolveListenAddresses(":28088", []string{"127.0.0.1:28088", "0.0.0.0:28088", "127.0.0.1:28088"})
+	want := []string{"127.0.0.1:28088", "0.0.0.0:28088"}
 	if len(addrs) != len(want) {
 		t.Fatalf("expected %d addresses, got %#v", len(want), addrs)
 	}
