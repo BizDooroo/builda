@@ -118,6 +118,43 @@ tasks:
 	}
 }
 
+func TestTaskRunAPIStartsTask(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "hello task",
+		Name:    "Hello Task",
+		Command: "echo api-run",
+		Timeout: "5s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/"+url.PathEscape(task.ID)+"/run", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected task run API to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var run RunSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	if run.TaskID != task.ID || run.TaskName != task.Name {
+		t.Fatalf("expected task summary for %q, got %#v", task.ID, run)
+	}
+
+	active := app.runner.byID[run.ID]
+	if active == nil {
+		t.Fatalf("expected run %q to exist", run.ID)
+	}
+	waitForRun(t, active)
+}
+
 func TestRunnerWritesCompletedLog(t *testing.T) {
 	runner := NewRunner(t.TempDir())
 	run, err := runner.Start(TaskConfig{

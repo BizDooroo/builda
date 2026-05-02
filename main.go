@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,6 +164,7 @@ func main() {
 	mux.HandleFunc("/api/state", app.handleState)
 	mux.HandleFunc("/api/config", app.handleConfig)
 	mux.HandleFunc("/api/tasks/start", app.handleStart)
+	mux.HandleFunc("/api/tasks/", app.handleTaskAPI)
 	mux.HandleFunc("/api/runs/", app.handleRunAPI)
 
 	log.Printf("listening on http://localhost%s", cfg.Server.Address)
@@ -703,7 +705,33 @@ func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	taskID := r.FormValue("task_id")
+	a.startTask(w, r.FormValue("task_id"))
+}
+
+func (a *App) handleTaskAPI(w http.ResponseWriter, r *http.Request) {
+	escapedPath := r.URL.EscapedPath()
+	if escapedPath == "" {
+		escapedPath = r.URL.Path
+	}
+	path := strings.Trim(strings.TrimPrefix(escapedPath, "/api/tasks/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "run" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	taskID, err := url.PathUnescape(parts[0])
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	a.startTask(w, taskID)
+}
+
+func (a *App) startTask(w http.ResponseWriter, taskID string) {
 	a.mu.RLock()
 	task, ok := a.tasks[taskID]
 	a.mu.RUnlock()
@@ -941,6 +969,26 @@ const pageTemplate = `<!doctype html>
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .api-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      box-shadow: rgb(235,235,235) 0px 0px 0px 1px;
+      background: #fafafa;
+      color: var(--muted);
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      min-width: 0;
+    }
+    .api-row span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
     button, .button {
       appearance: none;
       display: inline-flex;
@@ -1130,8 +1178,7 @@ const pageTemplate = `<!doctype html>
         event.preventDefault();
         start.disabled = true;
         try {
-          const body = new URLSearchParams({task_id: start.dataset.start});
-          const response = await fetch("/api/tasks/start", {method: "POST", body});
+          const response = await fetch(taskRunAPI(start.dataset.start), {method: "POST"});
           if (!response.ok) throw new Error(await response.text());
           await refresh();
         } catch (error) {
@@ -1139,6 +1186,12 @@ const pageTemplate = `<!doctype html>
         } finally {
           start.disabled = false;
         }
+      }
+
+      const copy = event.target.closest("[data-copy-api]");
+      if (copy) {
+        event.preventDefault();
+        await navigator.clipboard.writeText(window.location.origin + copy.dataset.copyApi);
       }
 
       const cancel = event.target.closest("[data-cancel]");
@@ -1171,13 +1224,19 @@ const pageTemplate = `<!doctype html>
       }
       tasksEl.innerHTML = tasks.map((task) => {
         const timeout = task.Timeout ? " · timeout " + escapeHTML(task.Timeout) : "";
+        const api = taskRunAPI(task.ID);
         return '<article class="task">' +
           '<div class="row"><div><strong>' + escapeHTML(task.Name || task.ID) + '</strong>' +
           '<div class="meta">' + escapeHTML(task.ID) + timeout + '</div></div>' +
           '<button data-start="' + escapeHTML(task.ID) + '">Run</button></div>' +
           '<code>' + escapeHTML(task.Command) + '</code>' +
+          '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary" data-copy-api="' + escapeHTML(api) + '">Copy</button></div>' +
           '</article>';
       }).join("");
+    }
+
+    function taskRunAPI(taskID) {
+      return "/api/tasks/" + encodeURIComponent(taskID) + "/run";
     }
 
     function renderRuns(runs) {
