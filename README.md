@@ -80,7 +80,7 @@ builda --config config.yaml config set new-config.yaml
 cat new-config.yaml | builda --config config.yaml config set
 ```
 
-`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file.
+`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file. A running Builda server reloads the changed config file automatically, so task changes become available without restarting the daemon.
 
 During development from this repository, use the checked-in sample config explicitly:
 
@@ -132,6 +132,10 @@ builda --config /path/to/config.yaml --addr 127.0.0.1:28088 service install
 builda service install --dry-run
 builda service print --target linux
 builda service print --target darwin
+builda service status
+builda service restart
+builda service stop
+builda service start
 builda service uninstall
 ```
 
@@ -180,7 +184,7 @@ Fields:
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
 - `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
 
-Input IDs become environment variables for the command as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. Run inputs are stored with run state, so do not use them for secrets.
+Input IDs become environment variables for the command as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. `wait` is reserved for the task run API and cannot be used as an input ID. Run inputs are stored with run state, so do not use them for secrets.
 
 ## Web UI
 
@@ -204,6 +208,12 @@ Pass configured inputs as query parameters:
 
 ```bash
 curl -X POST "http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local"
+```
+
+Wait for a run to finish and return its summary plus log:
+
+```bash
+curl -X POST "http://localhost:28088/api/tasks/hello/run?wait=1"
 ```
 
 Legacy form-compatible start endpoint:

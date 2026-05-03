@@ -20,3 +20,4 @@
 - Preserve the single-runner queue and persisted run state behavior; follow `rules/architecture.md`.
 - Keep tests focused on runner state transitions, config validation, and API behavior; follow `rules/testing.md`.
 - Keep runtime logs, local binaries, coverage output, and secret-bearing env files out of Git; follow `rules/workflow.md`.
+- When asked to deploy, commit, push, patch-tag, and push the tag; follow `rules/deployment.md`.

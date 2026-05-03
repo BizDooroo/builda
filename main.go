@@ -34,6 +34,10 @@ const (
 	StatusCanceled = "CANCELED"
 	StatusAborted  = "ABORTED"
 
+	defaultListenAddress = ":28088"
+	taskRunWaitParam     = "wait"
+	configReloadInterval = time.Second
+
 	displayTimeLayout = "06-01-02 15:04:05"
 
 	sampleConfig = `server:
@@ -133,6 +137,7 @@ Field reference:
 
   tasks[].inputs[].id
     Required input ID. Use only letters, digits, underscores, and hyphens.
+    "wait" is reserved for the task run API and cannot be used as an input ID.
     The command receives the value as BUILDA_INPUT_<ID>, with hyphens converted
     to underscores and letters uppercased. For example, "target-env" becomes
     BUILDA_INPUT_TARGET_ENV.
@@ -162,6 +167,7 @@ Run API examples:
 
   curl -X POST http://localhost:28088/api/tasks/hello/run
   curl -X POST "http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local"
+  curl -X POST "http://localhost:28088/api/tasks/hello/run?wait=1"
 
 Security note:
 
@@ -223,6 +229,7 @@ type App struct {
 	logDir     string
 	hostname   string
 	started    time.Time
+	configFile fileStamp
 }
 
 type Runner struct {
@@ -275,9 +282,19 @@ type RunSummary struct {
 	Error        string            `json:"error,omitempty"`
 }
 
+type RunLogResponse struct {
+	*RunSummary
+	Log string `json:"log"`
+}
+
 type lockedWriter struct {
 	mu sync.Mutex
 	w  io.Writer
+}
+
+type fileStamp struct {
+	modTime time.Time
+	size    int64
 }
 
 type addressFlags []string
@@ -347,6 +364,18 @@ func resolveLogDir(configPath, logDir string) string {
 	return filepath.Clean(filepath.Join(base, logDir))
 }
 
+func statFileStamp(path string) (fileStamp, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}, err
+	}
+	return fileStamp{modTime: info.ModTime(), size: info.Size()}, nil
+}
+
+func (s fileStamp) equal(other fileStamp) bool {
+	return s.size == other.size && s.modTime.Equal(other.modTime)
+}
+
 func versionInfo() string {
 	v := strings.TrimSpace(version)
 	rev := strings.TrimSpace(commit)
@@ -395,7 +424,7 @@ func resolveListenAddresses(configAddress string, flagAddresses []string) []stri
 	if len(flagAddresses) == 0 {
 		configAddress = strings.TrimSpace(configAddress)
 		if configAddress == "" {
-			return []string{":28088"}
+			return []string{defaultListenAddress}
 		}
 		return []string{configAddress}
 	}
@@ -410,7 +439,7 @@ func resolveListenAddresses(configAddress string, flagAddresses []string) []stri
 		seen[addr] = true
 	}
 	if len(addrs) == 0 {
-		return []string{":28088"}
+		return []string{defaultListenAddress}
 	}
 	return addrs
 }
@@ -449,6 +478,25 @@ func loadConfig(path string) (Config, error) {
 	return parseConfig(data)
 }
 
+func loadRuntimeConfig(path string) (Config, error) {
+	cfg, err := loadConfig(path)
+	if err != nil {
+		return Config{}, err
+	}
+	return normalizeRuntimeConfig(path, cfg), nil
+}
+
+func normalizeRuntimeConfig(configPath string, cfg Config) Config {
+	if cfg.Server.Address == "" {
+		cfg.Server.Address = defaultListenAddress
+	}
+	if cfg.Server.LogDir == "" {
+		cfg.Server.LogDir = "logs"
+	}
+	cfg.Server.LogDir = resolveLogDir(configPath, cfg.Server.LogDir)
+	return cfg
+}
+
 func parseConfig(data []byte) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -476,6 +524,9 @@ func parseConfig(data []byte) (Config, error) {
 			inputID := strings.TrimSpace(input.ID)
 			if inputID == "" {
 				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id is required", i, j)
+			}
+			if inputID == taskRunWaitParam {
+				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id %q is reserved for the task run API", i, j, inputID)
 			}
 			if !validInputID(inputID) {
 				return Config{}, fmt.Errorf("tasks[%d].inputs[%d].id %q must contain only letters, digits, underscores, and hyphens", i, j, inputID)
@@ -603,7 +654,7 @@ func collectTaskInputs(task TaskConfig, values url.Values) (map[string]string, e
 		allowed[input.ID] = input
 	}
 	for key := range values {
-		if key == "task_id" {
+		if key == "task_id" || key == taskRunWaitParam {
 			continue
 		}
 		if _, ok := allowed[key]; !ok {
@@ -626,6 +677,20 @@ func collectTaskInputs(task TaskConfig, values url.Values) (map[string]string, e
 		inputs[input.ID] = value
 	}
 	return inputs, nil
+}
+
+func taskRunWaitRequested(values url.Values) (bool, error) {
+	value := strings.ToLower(strings.TrimSpace(values.Get(taskRunWaitParam)))
+	switch value {
+	case "":
+		return false, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be 1 or 0", taskRunWaitParam)
+	}
 }
 
 func cloneInputs(inputs map[string]string) map[string]string {
@@ -993,6 +1058,27 @@ func (r *Runner) Find(id string) (*RunSummary, bool) {
 	return run.summaryLocked(), true
 }
 
+func (r *Runner) Wait(ctx context.Context, id string) bool {
+	r.mu.RLock()
+	run := r.byID[id]
+	if run == nil {
+		r.mu.RUnlock()
+		return false
+	}
+	done := run.done
+	r.mu.RUnlock()
+
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (r *Run) summaryLocked() *RunSummary {
 	return &RunSummary{
 		ID:           r.ID,
@@ -1187,10 +1273,9 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.mu.Lock()
-	a.cfg = cfg
-	a.tasks = buildTaskMap(cfg.Tasks)
-	a.mu.Unlock()
+	cfg = normalizeRuntimeConfig(configPath, cfg)
+	stamp, _ := statFileStamp(configPath)
+	a.applyConfig(cfg, stamp)
 
 	respondJSON(w, map[string]any{
 		"ok":    true,
@@ -1198,12 +1283,73 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *App) watchConfig(interval time.Duration) {
+	if interval <= 0 {
+		interval = configReloadInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := a.reloadConfigIfChanged(); err != nil {
+			log.Printf("reload config: %v", err)
+		}
+	}
+}
+
+func (a *App) reloadConfigIfChanged() error {
+	a.mu.RLock()
+	configPath := a.configPath
+	previous := a.configFile
+	a.mu.RUnlock()
+	if strings.TrimSpace(configPath) == "" {
+		return nil
+	}
+	stamp, err := statFileStamp(configPath)
+	if err != nil {
+		return err
+	}
+	if stamp.equal(previous) {
+		return nil
+	}
+	cfg, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return err
+	}
+	a.applyConfig(cfg, stamp)
+	log.Printf("reloaded config %s", configPath)
+	return nil
+}
+
+func (a *App) reloadConfigFromDisk() error {
+	a.mu.RLock()
+	configPath := a.configPath
+	a.mu.RUnlock()
+	if strings.TrimSpace(configPath) == "" {
+		return errors.New("config path is empty")
+	}
+	cfg, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return err
+	}
+	stamp, _ := statFileStamp(configPath)
+	a.applyConfig(cfg, stamp)
+	return nil
+}
+
+func (a *App) applyConfig(cfg Config, stamp fileStamp) {
+	a.mu.Lock()
+	a.cfg = cfg
+	a.tasks = buildTaskMap(cfg.Tasks)
+	a.configFile = stamp
+	a.mu.Unlock()
+}
+
 func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	a.startTask(w, r.FormValue("task_id"), r.URL.Query())
+	a.startTask(r.Context(), w, r.FormValue("task_id"), r.URL.Query())
 }
 
 func (a *App) handleTaskAPI(w http.ResponseWriter, r *http.Request) {
@@ -1226,15 +1372,20 @@ func (a *App) handleTaskAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
-	a.startTask(w, taskID, r.URL.Query())
+	a.startTask(r.Context(), w, taskID, r.URL.Query())
 }
 
-func (a *App) startTask(w http.ResponseWriter, taskID string, values url.Values) {
+func (a *App) startTask(ctx context.Context, w http.ResponseWriter, taskID string, values url.Values) {
 	a.mu.RLock()
 	task, ok := a.tasks[taskID]
 	a.mu.RUnlock()
 	if !ok {
 		http.Error(w, "unknown task", http.StatusBadRequest)
+		return
+	}
+	wait, err := taskRunWaitRequested(values)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	inputs, err := collectTaskInputs(task, values)
@@ -1248,7 +1399,28 @@ func (a *App) startTask(w http.ResponseWriter, taskID string, values url.Values)
 		return
 	}
 	summary, _ := a.runner.Find(run.ID)
-	respondJSON(w, summary)
+	if !wait {
+		respondJSON(w, summary)
+		return
+	}
+	if !a.runner.Wait(ctx, run.ID) {
+		if ctx.Err() != nil {
+			http.Error(w, ctx.Err().Error(), http.StatusRequestTimeout)
+			return
+		}
+		http.Error(w, "run not found", http.StatusNotFound)
+		return
+	}
+	summary, _ = a.runner.Find(run.ID)
+	logData, err := readRunLog(a.logDir, run.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	respondJSON(w, RunLogResponse{
+		RunSummary: summary,
+		Log:        string(logData),
+	})
 }
 
 func (a *App) handleRunAPI(w http.ResponseWriter, r *http.Request) {
@@ -1287,20 +1459,25 @@ func (a *App) handleRunAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleLog(w http.ResponseWriter, r *http.Request, id string) {
-	path := filepath.Join(a.logDir, filepath.Base(id)+".log")
-	data, err := os.ReadFile(path)
+	data, err := readRunLog(a.logDir, id)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("Log file has not been created yet.\n"))
-			return
-		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write(data)
+}
+
+func readRunLog(logDir, id string) ([]byte, error) {
+	path := filepath.Join(logDir, filepath.Base(id)+".log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []byte("Log file has not been created yet.\n"), nil
+		}
+		return nil, err
+	}
+	return data, nil
 }
 
 func respondJSON(w http.ResponseWriter, value any) {

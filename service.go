@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,13 @@ type serviceSpec struct {
 type serviceArtifact struct {
 	Path    string
 	Content string
+}
+
+type serviceCommand struct {
+	Name         string
+	Args         []string
+	StreamOutput bool
+	IgnoreError  bool
 }
 
 func newServiceCommand(serveOpts *serveOptions) *cobra.Command {
@@ -108,13 +116,46 @@ Builda is internal-only software; do not bind it to untrusted networks.`),
 	bindServiceFlags(printCmd, opts)
 	printCmd.Flags().StringVar(&opts.targetOS, "target", opts.targetOS, "service target to print: linux or darwin")
 
-	serviceCmd.AddCommand(installCmd, uninstallCmd, printCmd)
+	serviceCmd.AddCommand(
+		installCmd,
+		uninstallCmd,
+		printCmd,
+		newServiceControlCommand(opts, "start"),
+		newServiceControlCommand(opts, "stop"),
+		newServiceControlCommand(opts, "restart"),
+		newServiceControlCommand(opts, "status"),
+	)
 	return serviceCmd
 }
 
 func bindServiceFlags(cmd *cobra.Command, opts *serviceOptions) {
 	cmd.Flags().StringVar(&opts.name, "name", opts.name, "service name")
 	cmd.Flags().StringVar(&opts.binaryPath, "binary", opts.binaryPath, "path to the builda binary; defaults to the current executable")
+}
+
+func bindServiceNameFlag(cmd *cobra.Command, opts *serviceOptions) {
+	cmd.Flags().StringVar(&opts.name, "name", opts.name, "service name")
+}
+
+func newServiceControlCommand(opts *serviceOptions, action string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          action,
+		Short:        titleServiceAction(action) + " the user daemon",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runServiceControl(cmd, opts, action)
+		},
+	}
+	bindServiceNameFlag(cmd, opts)
+	return cmd
+}
+
+func titleServiceAction(action string) string {
+	if action == "" {
+		return action
+	}
+	return strings.ToUpper(action[:1]) + action[1:]
 }
 
 func runServiceInstall(cmd *cobra.Command, serveOpts *serveOptions, opts *serviceOptions) error {
@@ -175,6 +216,37 @@ func runServiceUninstall(cmd *cobra.Command, opts *serviceOptions) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", path)
+	return nil
+}
+
+func runServiceControl(cmd *cobra.Command, opts *serviceOptions, action string) error {
+	name, err := normalizeServiceName(opts.name)
+	if err != nil {
+		return err
+	}
+	targetOS := runtime.GOOS
+	if targetOS != "linux" && targetOS != "darwin" {
+		return fmt.Errorf("service %s is not supported on %s", action, targetOS)
+	}
+	path, err := servicePath(targetOS, name)
+	if err != nil {
+		return err
+	}
+	commands, err := serviceControlCommands(targetOS, name, path, action)
+	if err != nil {
+		return err
+	}
+	for _, command := range commands {
+		var runErr error
+		if command.StreamOutput {
+			runErr = runCommandOutput(cmd.OutOrStdout(), command.Name, command.Args...)
+		} else {
+			runErr = runCommand(command.Name, command.Args...)
+		}
+		if runErr != nil && !command.IgnoreError {
+			return runErr
+		}
+	}
 	return nil
 }
 
@@ -405,8 +477,64 @@ func disableService(targetOS, name, path string) error {
 	}
 }
 
+func serviceControlCommands(targetOS, name, path, action string) ([]serviceCommand, error) {
+	switch targetOS {
+	case "linux":
+		if action != "start" && action != "stop" && action != "restart" && action != "status" {
+			return nil, fmt.Errorf("unknown service action %q", action)
+		}
+		return []serviceCommand{{
+			Name:         "systemctl",
+			Args:         []string{"--user", action, name + ".service"},
+			StreamOutput: action == "status",
+		}}, nil
+	case "darwin":
+		domain := launchdDomain()
+		label := launchdLabel(name)
+		target := domain + "/" + label
+		switch action {
+		case "start":
+			return []serviceCommand{
+				{Name: "launchctl", Args: []string{"bootstrap", domain, path}},
+				{Name: "launchctl", Args: []string{"enable", target}},
+				{Name: "launchctl", Args: []string{"kickstart", "-k", target}},
+			}, nil
+		case "stop":
+			return []serviceCommand{{Name: "launchctl", Args: []string{"bootout", domain, path}}}, nil
+		case "restart":
+			return []serviceCommand{
+				{Name: "launchctl", Args: []string{"bootout", domain, path}, IgnoreError: true},
+				{Name: "launchctl", Args: []string{"bootstrap", domain, path}},
+				{Name: "launchctl", Args: []string{"enable", target}},
+				{Name: "launchctl", Args: []string{"kickstart", "-k", target}},
+			}, nil
+		case "status":
+			return []serviceCommand{{Name: "launchctl", Args: []string{"print", target}, StreamOutput: true}}, nil
+		default:
+			return nil, fmt.Errorf("unknown service action %q", action)
+		}
+	default:
+		return nil, fmt.Errorf("service control is not supported on %s", targetOS)
+	}
+}
+
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message != "" {
+			return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, message)
+		}
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+func runCommandOutput(out io.Writer, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = out
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

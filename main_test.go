@@ -141,6 +141,17 @@ tasks:
 `,
 			want: "conflicts",
 		},
+		{
+			name: "reserved wait input",
+			body: `
+tasks:
+  - id: "bad"
+    command: "echo bad"
+    inputs:
+      - id: "wait"
+`,
+			want: "reserved",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -484,6 +495,39 @@ func TestServiceInstallDryRunDoesNotCreateConfig(t *testing.T) {
 	}
 }
 
+func TestServiceControlCommands(t *testing.T) {
+	linux, err := serviceControlCommands("linux", "builda", "/ignored", "restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linux) != 1 || linux[0].Name != "systemctl" || strings.Join(linux[0].Args, " ") != "--user restart builda.service" {
+		t.Fatalf("unexpected linux restart command: %#v", linux)
+	}
+
+	status, err := serviceControlCommands("linux", "builda", "/ignored", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status) != 1 || !status[0].StreamOutput {
+		t.Fatalf("expected linux status to stream output, got %#v", status)
+	}
+
+	path := filepath.Join(t.TempDir(), "com.bizdooroo.builda.plist")
+	darwin, err := serviceControlCommands("darwin", "builda", path, "restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(darwin) != 4 {
+		t.Fatalf("expected four darwin restart commands, got %#v", darwin)
+	}
+	if darwin[0].Name != "launchctl" || strings.Join(darwin[0].Args[:2], " ") != "bootout "+launchdDomain() || !darwin[0].IgnoreError {
+		t.Fatalf("unexpected darwin bootout command: %#v", darwin[0])
+	}
+	if strings.Join(darwin[3].Args, " ") != "kickstart -k "+launchdDomain()+"/com.bizdooroo.builda" {
+		t.Fatalf("unexpected darwin kickstart command: %#v", darwin[3])
+	}
+}
+
 func TestResolveListenAddressesUsesConfigByDefault(t *testing.T) {
 	addrs := resolveListenAddresses("127.0.0.1:9000", nil)
 	if len(addrs) != 1 || addrs[0] != "127.0.0.1:9000" {
@@ -574,6 +618,51 @@ tasks:
 	}
 	if _, ok := app.tasks["two"]; !ok {
 		t.Fatalf("expected in-memory task map to be updated, got %#v", app.tasks)
+	}
+}
+
+func TestAppReloadConfigFromDiskUpdatesTaskMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	initial := []byte(`
+tasks:
+  - id: "one"
+    command: "echo one"
+`)
+	if err := os.WriteFile(path, initial, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadRuntimeConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		cfg:        cfg,
+		tasks:      buildTaskMap(cfg.Tasks),
+		configPath: path,
+	}
+	if stamp, err := statFileStamp(path); err == nil {
+		app.configFile = stamp
+	}
+
+	updated := []byte(`
+tasks:
+  - id: "two"
+    name: "Two"
+    command: "echo two"
+`)
+	time.Sleep(time.Millisecond)
+	if err := os.WriteFile(path, updated, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.reloadConfigIfChanged(); err != nil {
+		t.Fatalf("reloadConfigIfChanged returned error: %v", err)
+	}
+	if _, ok := app.tasks["two"]; !ok {
+		t.Fatalf("expected reloaded task map to include updated task, got %#v", app.tasks)
+	}
+	if _, ok := app.tasks["one"]; ok {
+		t.Fatalf("expected old task to be removed after reload, got %#v", app.tasks)
 	}
 }
 
@@ -673,6 +762,66 @@ func TestTaskRunAPIPassesQueryInputsAsEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `params   {"message":"ship","target":"prod"}`) {
 		t.Fatalf("expected log to contain run input parameters, got:\n%s", data)
+	}
+}
+
+func TestTaskRunAPIWaitsAndReturnsRunLog(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "hello",
+		Name:    "Hello",
+		Command: "sleep 0.1; echo waited",
+		Timeout: "5s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/hello/run?wait=1", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected wait task run API to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		RunSummary
+		Log string `json:"log"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.TaskID != task.ID || payload.Status != StatusSuccess {
+		t.Fatalf("expected completed run summary, got %#v", payload.RunSummary)
+	}
+	if !strings.Contains(payload.Log, "stdout   waited") {
+		t.Fatalf("expected response log to include command output, got:\n%s", payload.Log)
+	}
+}
+
+func TestTaskRunAPIRejectsInvalidWaitParam(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "hello",
+		Name:    "Hello",
+		Command: "echo hello",
+		Timeout: "5s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/hello/run?wait=later", nil)
+	app.handleTaskAPI(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid wait to be rejected, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

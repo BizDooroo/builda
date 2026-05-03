@@ -182,18 +182,11 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 			return fmt.Errorf("initialize default config: %w", err)
 		}
 	}
-	cfg, err := loadConfig(configPath)
+	cfg, err := loadRuntimeConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if cfg.Server.Address == "" {
-		cfg.Server.Address = ":28088"
-	}
 	listenAddrs := resolveListenAddresses(cfg.Server.Address, addrs)
-	if cfg.Server.LogDir == "" {
-		cfg.Server.LogDir = "logs"
-	}
-	cfg.Server.LogDir = resolveLogDir(configPath, cfg.Server.LogDir)
 	if err := os.MkdirAll(cfg.Server.LogDir, 0755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}
@@ -217,9 +210,13 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 		hostname:   hostname,
 		started:    time.Now(),
 	}
+	if stamp, err := statFileStamp(configPath); err == nil {
+		app.configFile = stamp
+	}
 
 	log.Printf("config %s", configPath)
 	log.Printf("logs %s", cfg.Server.LogDir)
+	go app.watchConfig(configReloadInterval)
 	return serveHTTP(listenAddrs, app.routes())
 }
 
