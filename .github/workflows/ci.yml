@@ -41,7 +41,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          gofmt -w main.go cli.go service.go main_test.go
+          make fmt
           git diff --exit-code
 
       - name: Check whitespace

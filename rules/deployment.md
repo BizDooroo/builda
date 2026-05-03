@@ -4,4 +4,5 @@
 - Derive the next default release tag from the highest existing `vMAJOR.MINOR.PATCH` tag by incrementing `PATCH`.
 - Push to the configured upstream remote for the branch. If no upstream exists, use `origin` and set upstream on push.
 - Do not include unrelated, generated, secret-bearing, log, coverage, or local binary files in deployment commits.
+- Before tagging a deployment, inspect GitHub workflow formatting/test steps and keep them aligned with `Makefile` targets and the current file layout; do not rely only on local commands when CI hard-codes file names.
 - If checks fail, do not create or push a release tag until the failure is fixed or the user explicitly accepts the risk.
