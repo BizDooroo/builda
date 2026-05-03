@@ -8,7 +8,7 @@ Builda is a small Go web server for running preconfigured shell tasks from `conf
 
 The repository is safe to publish from a secret-scanning perspective as of the latest local check: `gitleaks detect --source . --no-banner --redact --verbose` reported no leaks.
 
-Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured commands as Bash scripts, and the Web UI can include a config editor that changes those commands. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
+Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured scripts as Bash scripts, and the Web UI can include a config editor that changes those scripts. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
 
 Binding to `:28088` or `0.0.0.0:28088` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
 
@@ -96,7 +96,7 @@ go run . --config config.yaml --addr 127.0.0.1:28088 --addr 192.168.10.5:28088
 go run . --config config.yaml --addr 0.0.0.0:28088
 ```
 
-When `--addr` is provided, it overrides `server.address`. Repeat `--addr` to bind only the network interfaces you want.
+When `--addr` is provided, it overrides `server.address` and `server.addresses`. Repeat `--addr` to bind only the network interfaces you want.
 
 ## Daemon Install
 
@@ -149,7 +149,8 @@ Tasks are managed in YAML:
 
 ```yaml
 server:
-  address: "127.0.0.1:28088"
+  addresses:
+    - "127.0.0.1:28088"
   log_dir: "logs"
   script_header: |
     #!/usr/bin/env bash
@@ -160,7 +161,7 @@ tasks:
   - id: "hello"
     name: "Hello world"
     description: "Print a greeting"
-    command: "echo hello $BUILDA_INPUT_NAME"
+    script: "echo hello $BUILDA_INPUT_NAME"
     timeout: "30s"
     inputs:
       - id: "name"
@@ -179,22 +180,23 @@ tasks:
 
 Fields:
 
-- `server.address`: HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
+- `server.address`: single HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
+- `server.addresses`: optional list of HTTP listen addresses used when `--addr` is not provided. Use this to bind multiple specific interfaces, such as `127.0.0.1:28088` and `192.168.0.40:28088`.
 - `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
 - `server.config_password`: optional password for the Web UI config editor and `/api/config`. When omitted or empty, the home page hides the config button and the HTTP config editor is disabled.
-- `server.script_header`: optional Bash script header prepended to every task command. Defaults to `#!/usr/bin/env bash`. Use this for platform-specific startup such as `PATH` exports or shell profile sourcing.
+- `server.script_header`: optional Bash script header prepended to every task script. Defaults to `#!/usr/bin/env bash`. Use this for platform-specific startup such as `PATH` exports or shell profile sourcing.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
 - `tasks[].description`: optional short description shown in the task list.
-- `tasks[].command`: Bash script body. Builda prepends `server.script_header`, then runs the configured command.
+- `tasks[].script`: Bash script body. Builda prepends `server.script_header`, then runs the configured script.
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
 - `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
 
-Input IDs become environment variables for the command as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. `wait` is reserved for the task run API and cannot be used as an input ID. Run inputs are stored with run state, so do not use them for secrets.
+Input IDs become environment variables for the script as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. `wait` is reserved for the task run API and cannot be used as an input ID. Run inputs are stored with run state, so do not use them for secrets.
 
 ## Web UI
 
-The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the command, configured inputs, and API address. If a task has inputs, pressing Run opens a popup for string fields and choice selectors before appending the run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
+The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the script, configured inputs, and API address. If a task has inputs, pressing Run opens a popup for string fields and choice selectors before appending the run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
 
 Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, parameters, finish, and cancellation times.
 
@@ -244,7 +246,7 @@ Other useful endpoints:
 
 Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state after a restart is marked `ABORTED`; queued runs are resumed.
 
-`logs/` is intentionally ignored by Git because command output may contain local paths or secrets.
+`logs/` is intentionally ignored by Git because script output may contain local paths or secrets.
 
 ## Development
 

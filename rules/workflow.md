@@ -1,6 +1,7 @@
 # Workflow Rules
 
 - Use `rg` for repository search and `gofmt` for Go formatting.
+- Treat files over 300 lines as a warning sign and avoid growing them further without a reason; immediately split any source or test file that exceeds 500 lines.
 - Keep the Makefile `fmt` target aligned with every tracked Go source file.
 - Keep Makefile targets simple command wrappers without silent `@` prefixes, echo banners, or help text.
 - Keep commits scoped to one user-visible purpose and stage files explicitly.

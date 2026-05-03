@@ -3,7 +3,7 @@ import { escapeHTML, formatRunParams, formatTime, initShell } from "./shared.js"
 const runID = decodeURIComponent(window.location.pathname.replace(/^\/runs\//, "").replace(/\/$/, ""));
 const titleEl = document.querySelector("#run-title");
 const runIDEl = document.querySelector("#run-id");
-const commandEl = document.querySelector("#command");
+const scriptEl = document.querySelector("#script");
 const logEl = document.querySelector("#log");
 const badgeEl = document.querySelector("#badge");
 const requestedEl = document.querySelector("#requested");
@@ -23,7 +23,7 @@ async function refresh() {
     document.title = run.task_name + " · Builda";
     titleEl.textContent = run.task_name;
     runIDEl.textContent = run.id;
-    commandEl.textContent = run.command;
+    scriptEl.textContent = run.script;
     badgeEl.textContent = String(run.status || "").toLowerCase();
     badgeEl.className = "badge status-" + escapeHTML(run.status);
     requestedEl.textContent = "request " + formatTime(run.requested_at);

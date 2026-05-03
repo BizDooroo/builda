@@ -120,7 +120,7 @@ async function renderSelectedRun() {
       "</div>" +
       '<div class="summary-actions">' + renderStatusBadge(run.status) + cancel + "</div></div>" +
       '<div class="kv"><span>Task <b>' + escapeHTML(run.task_id) + '</b></span><span>Exit <b>' + escapeHTML(run.exit_code) + "</b></span></div>" +
-      "<code>" + escapeHTML(run.command) + "</code>" +
+      "<code>" + escapeHTML(run.script) + "</code>" +
       renderTimes(run);
   }
   if (logResponse.ok) {

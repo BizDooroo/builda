@@ -1,7 +1,7 @@
 .PHONY: fmt lint test build check
 
 fmt:
-	gofmt -w main.go cli.go service.go main_test.go
+	gofmt -w *.go
 
 lint:
 	git diff --check

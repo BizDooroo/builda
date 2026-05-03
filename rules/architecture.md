@@ -1,14 +1,14 @@
 # Architecture Rules
 
-- Keep Builda as a small single-binary Go server unless the user asks for a larger split.
-- `main.go` owns the HTTP server, YAML config loading, runner, embedded frontend serving, and JSON APIs.
-- Cobra command setup belongs in `cli.go`, with service installation details in `service.go`.
+- Keep Builda as a small single-binary Go server split into focused files by responsibility.
+- `main.go` owns entrypoint constants and embedding; keep config parsing/loading in `config.go`, runner execution in `runner.go`, HTTP handlers in `handlers.go`, shared types in `types.go`, and service installation support in `service*.go`.
+- Cobra command setup belongs in `cli.go`, with service command setup and platform details in `service*.go`.
 - The runner executes one task at a time. New task starts append `QUEUED` runs, and `dispatchLocked` starts the next queued run only when no run is active.
 - Persist run state in `log_dir/runs.json`. On restart, convert stale `RUNNING` runs to `ABORTED` and resume queued runs.
 - Resolve relative `server.log_dir` paths from the directory containing the active config file, not from the process working directory.
 - Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
-- Keep task run APIs tied to configured task IDs. Do not accept arbitrary command strings through the run API.
-- Task run inputs must be declared on the task config, validated before queueing, persisted on the run, and passed to commands through `BUILDA_INPUT_*` environment variables.
+- Keep task run APIs tied to configured task IDs. Do not accept arbitrary script strings through the run API.
+- Task run inputs must be declared on the task config, validated before queueing, persisted on the run, and passed to scripts through `BUILDA_INPUT_*` environment variables.
 - Keep platform-specific task shell startup in `server.script_header`, and copy that header onto each runtime task snapshot so queued and historical runs preserve the execution environment used when they were requested.
 - `wait` is reserved as a task run API control query parameter. `wait=1` should block until the queued run reaches a terminal state and return the run log with the response.
 - Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
@@ -18,3 +18,5 @@
 - Keep daemon installation user-scoped. Linux installs should target systemd user units, and macOS installs should target launchd LaunchAgents; do not require root-owned system service files unless explicitly requested.
 - Config write paths, including CLI commands and HTTP handlers, must parse and validate YAML before replacing the current config file.
 - A running server should reload the active config file after it changes so `builda config set` updates configured tasks without a daemon restart.
+- Keep `server.address` as the backward-compatible single listen address and `server.addresses` as the multi-address config list; repeated `--addr` values override both.
+- Use `tasks[].script` for task bodies; do not reintroduce `tasks[].command`.

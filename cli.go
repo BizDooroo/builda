@@ -60,7 +60,7 @@ func newRootCommand() *cobra.Command {
 
 func bindServePersistentFlags(cmd *cobra.Command, opts *serveOptions) {
 	cmd.PersistentFlags().StringVar(&opts.configPath, "config", opts.configPath, "YAML configuration file")
-	cmd.PersistentFlags().Var(&opts.addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address")
+	cmd.PersistentFlags().Var(&opts.addrs, "addr", "HTTP listen address; repeat to bind multiple interfaces and override server.address/server.addresses")
 }
 
 func newVersionCommand() *cobra.Command {
@@ -185,7 +185,7 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	listenAddrs := resolveListenAddresses(cfg.Server.Address, addrs)
+	listenAddrs := resolveListenAddresses(configuredListenAddresses(cfg.Server), addrs)
 	if err := os.MkdirAll(cfg.Server.LogDir, 0755); err != nil {
 		return fmt.Errorf("create log dir: %w", err)
 	}

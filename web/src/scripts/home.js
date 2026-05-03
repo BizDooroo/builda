@@ -145,7 +145,7 @@ function renderTasks(tasks) {
       '<div class="detail-line"><span>Task ID</span><span>' + escapeHTML(task.ID) + "</span></div>" +
       timeout +
       inputDetails +
-      "<code>" + escapeHTML(task.Command) + "</code>" +
+      "<code>" + escapeHTML(task.script) + "</code>" +
       '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary" data-copy-api="' + escapeHTML(api) + '">Copy</button></div>' +
       '<div class="actions"><a class="button secondary" href="/runs?task=' + encodeURIComponent(task.ID) + '">View runs</a></div>' +
       "</div>" : "";
@@ -226,7 +226,7 @@ function renderRuns(runs) {
     return '<article class="run">' +
       '<div class="row"><div><strong>' + escapeHTML(run.task_name) + '</strong><div class="meta">' + escapeHTML(run.id) + "</div></div>" +
       renderStatusBadge(run.status) + "</div>" +
-      "<code>" + escapeHTML(run.command) + "</code>" +
+      "<code>" + escapeHTML(run.script) + "</code>" +
       renderTimes(run) +
       '<div class="actions"><a class="button secondary" href="/runs?run=' + encodeURIComponent(run.id) + '">View log</a>' + cancel + "</div>" +
       "</article>";
