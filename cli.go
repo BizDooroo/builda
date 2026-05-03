@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"html/template"
 	"io"
 	"log"
 	"os"
@@ -202,10 +201,6 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 		tasks:      buildTaskMap(cfg.Tasks),
 		configPath: configPath,
 		runner:     runner,
-		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
-		runsTmpl:   template.Must(template.New("runs").Parse(runsPageTemplate)),
-		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
-		logTmpl:    template.Must(template.New("log").Parse(logPageTemplate)),
 		logDir:     cfg.Server.LogDir,
 		hostname:   hostname,
 		started:    time.Now(),

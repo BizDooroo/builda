@@ -1,0 +1,14 @@
+{
+  "name": "builda-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "dev": "astro dev --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "astro": "^5.13.8"
+  },
+  "packageManager": "pnpm@10.33.2"
+}

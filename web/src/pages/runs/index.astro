@@ -1,0 +1,35 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Runs · Builda" active="runs">
+  <main class="runs-grid">
+    <section>
+      <div class="panel-head">
+        <div>
+          <h1>Run list</h1>
+          <div id="run-filter" class="meta" hidden></div>
+        </div>
+        <div class="toolbar">
+          <a id="clear-run-filter" class="button secondary" href="/runs" hidden>All runs</a>
+          <div id="run-count" class="meta">0 runs</div>
+        </div>
+      </div>
+      <div id="run-picker" class="run-picker" hidden>
+        <select id="run-select" aria-label="Select run"></select>
+      </div>
+      <div id="runs" class="run-list"></div>
+    </section>
+
+    <section class="inspector">
+      <div id="summary" class="summary">
+        <div class="empty">Select a run.</div>
+      </div>
+      <pre id="log">Select a run to load its log.</pre>
+    </section>
+  </main>
+
+  <script>
+    import "../../scripts/runs.js";
+  </script>
+</AppShell>

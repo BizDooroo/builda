@@ -1,0 +1,27 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Config · Builda" backHref="/" active="config">
+  <main class="config-grid">
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h1>Config editor</h1>
+          <div class="meta" data-config-path></div>
+        </div>
+        <div class="auth-row">
+          <input id="config-password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Config password" />
+          <button id="load-config">Load</button>
+          <button id="save-config">Save</button>
+        </div>
+      </div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+      <div id="config-status" class="editor-status"></div>
+    </section>
+  </main>
+
+  <script>
+    import "../../scripts/config.js";
+  </script>
+</AppShell>

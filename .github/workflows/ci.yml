@@ -21,9 +21,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Build embedded frontend
+        run: pnpm --dir web build
+
       - name: Check formatting
         run: |
-          gofmt -w main.go main_test.go
+          gofmt -w main.go cli.go service.go main_test.go
           git diff --exit-code
 
       - name: Check whitespace

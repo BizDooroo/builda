@@ -1,0 +1,30 @@
+---
+import AppShell from "../layouts/AppShell.astro";
+---
+
+<AppShell title="Run · Builda" backHref="/runs" backLabel="Back" headerMode="run-detail">
+  <main class="run-detail-grid">
+    <section class="summary">
+      <div class="summary-head">
+        <div class="summary-title">
+          <h1 id="run-title">Loading run</h1>
+          <div class="meta" id="run-id"></div>
+          <div class="meta" id="params" hidden></div>
+        </div>
+        <span class="badge" id="badge">loading</span>
+      </div>
+      <code id="command"></code>
+      <div class="times">
+        <span id="requested">request -</span>
+        <span id="started">start -</span>
+        <span id="finished">finished -</span>
+        <span id="canceled">cancelled -</span>
+      </div>
+    </section>
+    <pre id="log">Loading log...</pre>
+  </main>
+
+  <script>
+    import "../scripts/run-detail.js";
+  </script>
+</AppShell>

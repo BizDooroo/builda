@@ -1,5 +1,7 @@
 .codex-cc/
 logs/
+web/.astro/
+web/node_modules/
 
 # Local environment and secrets
 .env
@@ -9,6 +11,8 @@ logs/
 # Go build and test output
 /builda
 dist/
+!web/dist/
+!web/dist/**
 *.test
 *.out
 coverage.txt

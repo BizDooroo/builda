@@ -199,6 +199,8 @@ Open `/runs?task=hello` to show only runs for one task in the run list workspace
 
 When `server.config_password` is set, the config editor is available at `/config` and requires that password before loading or saving YAML. When the password is omitted, the home page does not show the config button and the HTTP config editor is disabled.
 
+The Web UI source is an Astro static frontend in `web/`. Builda embeds only the built `web/dist/` files into the Go binary. The built dist files are committed so `go install github.com/BizDooroo/builda@latest` can build the single binary without requiring Node or pnpm.
+
 ## API
 
 Start a task by ID:
@@ -227,6 +229,7 @@ curl -X POST -d task_id=hello http://localhost:28088/api/tasks/start
 
 Other useful endpoints:
 
+- `GET /api/meta`: server metadata for the static Web UI, including hostname, log directory, start time, config path, and whether config editing is enabled.
 - `GET /api/state`: current tasks and run summaries. Add `?task={taskID}` to return only runs for one task.
 - `GET /api/runs/{runID}`: one run summary.
 - `POST /api/runs/{runID}/cancel`: cancel a queued or running task.
@@ -243,8 +246,12 @@ Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state aft
 ## Development
 
 ```bash
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web build
 make fmt lint test build
 ```
+
+Run `pnpm --dir web build` after changing files under `web/src/` and commit the resulting `web/dist/` changes with the source changes.
 
 ## Release
 

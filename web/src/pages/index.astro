@@ -1,0 +1,52 @@
+---
+import AppShell from "../layouts/AppShell.astro";
+---
+
+<AppShell title="Builda" active="tasks">
+  <main class="home-grid">
+    <section>
+      <div class="panel-head">
+        <h1>All tasks</h1>
+        <div id="task-count" class="count">0 tasks</div>
+      </div>
+      <div id="tasks" class="task-list"></div>
+    </section>
+
+    <section>
+      <div class="panel-head">
+        <h1>Latest runs</h1>
+        <div class="run-head-actions">
+          <a class="button secondary" href="/runs">All runs</a>
+          <div id="run-count" class="count">0 runs</div>
+        </div>
+      </div>
+      <div id="runs" class="run-list"></div>
+    </section>
+  </main>
+
+  <div id="run-modal" class="modal-shell" hidden>
+    <form id="run-form" class="modal">
+      <div class="modal-head">
+        <div class="modal-title">
+          <h2 id="run-modal-title">Run task</h2>
+          <div id="run-modal-meta" class="meta"></div>
+        </div>
+        <button class="secondary icon-button" type="button" data-close-run-modal aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18"></path>
+            <path d="m6 6 12 12"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="run-modal-fields" class="modal-fields"></div>
+      <div class="task-actions">
+        <button class="secondary" type="button" data-close-run-modal>Cancel</button>
+        <button id="run-modal-submit" type="submit">Run</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    import "../scripts/home.js";
+  </script>
+</AppShell>

@@ -1,0 +1,39 @@
+---
+import "../styles/app.css";
+
+const {
+  title = "Builda",
+  active = "",
+  backHref = "",
+  backLabel = "Back",
+  headerMode = "default",
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title}</title>
+  </head>
+  <body data-header-mode={headerMode}>
+    <header>
+      {
+        backHref ? (
+          <a class="button secondary" href={backHref}>{backLabel}</a>
+        ) : (
+          <a class="brand" href="/" aria-label="Builda home">Builda</a>
+        )
+      }
+      <nav class="toolbar" aria-label="Primary">
+        <div class="server-meta" data-server-meta>Loading server...</div>
+        <a class:list={["button", "secondary", active === "tasks" && "active"]} href="/">Tasks</a>
+        <a class:list={["button", "secondary", active === "runs" && "active"]} href="/runs">Runs</a>
+        <a class="button secondary" href="/config" data-config-link hidden>Config</a>
+      </nav>
+    </header>
+    <slot />
+  </body>
+</html>

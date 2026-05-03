@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"html/template"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +24,34 @@ func TestMain(m *testing.M) {
 		_ = os.RemoveAll(home)
 	}
 	os.Exit(code)
+}
+
+func assertEmbeddedWebContains(t *testing.T, needle string) {
+	t.Helper()
+	dist, err := fs.Sub(webDist, "web/dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	err = fs.WalkDir(dist, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || found {
+			return err
+		}
+		data, err := fs.ReadFile(dist, path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), needle) {
+			found = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("expected embedded web assets to contain %q", needle)
+	}
 }
 
 func TestLoadConfigValidatesTasks(t *testing.T) {
@@ -724,11 +752,9 @@ tasks:
 
 func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 	app := &App{
-		cfg:        Config{},
-		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
-		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
-		hostname:   "test-host",
-		started:    time.Unix(0, 0),
+		cfg:      Config{},
+		hostname: "test-host",
+		started:  time.Unix(0, 0),
 	}
 
 	rec := httptest.NewRecorder()
@@ -737,8 +763,8 @@ func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), `href="/config"`) {
-		t.Fatalf("expected config button to be hidden without password, got:\n%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `data-config-link hidden`) {
+		t.Fatalf("expected static config link to start hidden, got:\n%s", rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
@@ -748,17 +774,20 @@ func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 		t.Fatalf("expected config page to be hidden without password, got %d", rec.Code)
 	}
 
-	app.cfg.Server.ConfigPassword = "secret"
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/", nil)
-	app.handleIndex(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
+	req = httptest.NewRequest(http.MethodGet, "/api/meta", nil)
+	app.handleMeta(rec, req)
+	var meta struct {
+		ConfigEditingEnabled bool `json:"config_editing_enabled"`
 	}
-	if !strings.Contains(rec.Body.String(), `href="/config"`) {
-		t.Fatalf("expected config button with password, got:\n%s", rec.Body.String())
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.ConfigEditingEnabled {
+		t.Fatalf("expected meta to report disabled config editing")
 	}
 
+	app.cfg.Server.ConfigPassword = "secret"
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/config", nil)
 	app.handleConfigPage(rec, req)
@@ -767,6 +796,19 @@ func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `type="password"`) {
 		t.Fatalf("expected password input on config page, got:\n%s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/meta", nil)
+	app.handleMeta(rec, req)
+	meta = struct {
+		ConfigEditingEnabled bool `json:"config_editing_enabled"`
+	}{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if !meta.ConfigEditingEnabled {
+		t.Fatalf("expected meta to report enabled config editing")
 	}
 }
 
@@ -1068,7 +1110,6 @@ func TestStateAPIFiltersRunsByTaskQuery(t *testing.T) {
 
 func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
 	app := &App{
-		runsTmpl: template.Must(template.New("runs").Parse(runsPageTemplate)),
 		logDir:   "logs",
 		hostname: "test-host",
 		started:  time.Unix(0, 0),
@@ -1081,18 +1122,15 @@ func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
 		t.Fatalf("expected runs page to render, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "host test-host") {
-		t.Fatalf("expected hostname in header, got:\n%s", body)
+	if !strings.Contains(body, `data-server-meta`) {
+		t.Fatalf("expected runs page to render server meta hook, got:\n%s", body)
 	}
-	if !strings.Contains(body, `const taskFilter = params.get("task") || "";`) {
-		t.Fatalf("expected runs page to support task query filtering, got:\n%s", body)
+	if !strings.Contains(body, `id="run-picker"`) {
+		t.Fatalf("expected runs page to render mobile picker, got:\n%s", body)
 	}
-	if !strings.Contains(body, `id="run-picker"`) || !strings.Contains(body, `elapsed `) || !strings.Contains(body, `duration `) {
-		t.Fatalf("expected runs page to render mobile picker and timing metadata, got:\n%s", body)
-	}
-	if !strings.Contains(body, `renderRunParams(run)`) || !strings.Contains(body, `formatRunParams(run.inputs)`) {
-		t.Fatalf("expected runs page to render run input params in the summary header, got:\n%s", body)
-	}
+	assertEmbeddedWebContains(t, "/api/state?task=")
+	assertEmbeddedWebContains(t, "params ")
+	assertEmbeddedWebContains(t, "duration ")
 }
 
 func TestRunPageRendersParamsHeaderHook(t *testing.T) {
@@ -1113,7 +1151,6 @@ func TestRunPageRendersParamsHeaderHook(t *testing.T) {
 		},
 	}
 	app := &App{
-		logTmpl:  template.Must(template.New("log").Parse(logPageTemplate)),
 		runner:   runner,
 		hostname: "test-host",
 	}
@@ -1127,18 +1164,24 @@ func TestRunPageRendersParamsHeaderHook(t *testing.T) {
 	body := rec.Body.String()
 	for _, expected := range []string{
 		`id="params"`,
-		`paramsEl.textContent = "params " + formattedParams;`,
-		`function formatRunParams(inputs)`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected run page to include %q, got:\n%s", expected, body)
 		}
 	}
+	assertEmbeddedWebContains(t, "params ")
+	assertEmbeddedWebContains(t, "/api/runs/")
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/runs/missing", nil)
+	app.handleRunPage(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected missing run page to 404, got %d", rec.Code)
+	}
 }
 
 func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
 	app := &App{
-		pageTmpl: template.Must(template.New("page").Parse(pageTemplate)),
 		logDir:   "logs",
 		hostname: "test-host",
 		started:  time.Unix(0, 0),
@@ -1152,19 +1195,22 @@ func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, expected := range []string{
-		"text-overflow: ellipsis",
-		"grid-template-columns: minmax(0, 1fr) auto",
-		"task-description-full",
-		"async function copyText(text)",
-		"document.execCommand(\"copy\")",
-		"window.isSecureContext",
 		"id=\"run-modal\"",
-		"taskRunAPI(taskID, values = {})",
-		"BUILDA_INPUT_",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected index page to include %q, got:\n%s", expected, body)
 		}
+	}
+	for _, expected := range []string{
+		"text-overflow:ellipsis",
+		"grid-template-columns:minmax(0,1fr) auto",
+		"task-description-full",
+		"document.execCommand",
+		"window.isSecureContext",
+		"/api/tasks/",
+		"BUILDA_INPUT_",
+	} {
+		assertEmbeddedWebContains(t, expected)
 	}
 }
 
