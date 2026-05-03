@@ -39,8 +39,8 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir web install --frozen-lockfile
 
-      - name: Build embedded frontend
-        run: pnpm --dir web build
+      - name: Check frontend build
+        run: pnpm --dir web exec astro build --outDir /tmp/builda-web-dist
 
       - name: Test
         run: go test ./...
