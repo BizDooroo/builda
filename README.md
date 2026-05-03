@@ -151,6 +151,8 @@ Tasks are managed in YAML:
 server:
   address: "127.0.0.1:28088"
   log_dir: "logs"
+  script_header: |
+    #!/usr/bin/env bash
   # Set this to enable and protect the Web UI config editor.
   # config_password: "change-me"
 
@@ -180,10 +182,11 @@ Fields:
 - `server.address`: HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
 - `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
 - `server.config_password`: optional password for the Web UI config editor and `/api/config`. When omitted or empty, the home page hides the config button and the HTTP config editor is disabled.
+- `server.script_header`: optional Bash script header prepended to every task command. Defaults to `#!/usr/bin/env bash`. Use this for platform-specific startup such as `PATH` exports or shell profile sourcing.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
 - `tasks[].description`: optional short description shown in the task list.
-- `tasks[].command`: Bash script body. Builda wraps it with `#!/usr/bin/env bash`, sources `~/.bashrc` when present, then runs the configured command.
+- `tasks[].command`: Bash script body. Builda prepends `server.script_header`, then runs the configured command.
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
 - `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
 

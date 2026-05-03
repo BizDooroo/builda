@@ -2,7 +2,7 @@
 
 - Builda is internal-only software. Treat every deployment as trusted-local or trusted-private-network only.
 - Add a clear disclaimer whenever documenting exposure or operation: the project is not hardened and security risks are expected to exist across the implementation.
-- Builda runs configured commands as Bash scripts after wrapping them with `#!/usr/bin/env bash` and sourcing `~/.bashrc` when present; treat every configured task as privileged shell execution on the host.
+- Builda runs configured commands by prepending `server.script_header` to the task command; the default header is `#!/usr/bin/env bash`. Treat every configured task and script header as privileged shell execution on the host.
 - Do not expose a running Builda server to untrusted networks without adding authentication, authorization, CSRF protection, and transport security.
 - The config editor can change commands. Treat `/config` and `/api/config` as administrative surfaces.
 - `server.config_password` protects only the Web UI config editor and `/api/config`. CLI `builda config get/set` remains an administrator-local operation and must not require that password.

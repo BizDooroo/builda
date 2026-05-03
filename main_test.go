@@ -298,6 +298,30 @@ func TestResolveLogDirKeepsAbsolutePath(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeConfigAppliesScriptHeaderToTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`
+server:
+  script_header: |
+    #!/usr/bin/env bash
+    export BUILDA_FROM_HEADER=loaded
+tasks:
+  - id: one
+    command: echo "$BUILDA_FROM_HEADER"
+`), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadRuntimeConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 || !strings.Contains(cfg.Tasks[0].ScriptHeader, "BUILDA_FROM_HEADER=loaded") {
+		t.Fatalf("expected runtime task to carry script header, got %#v", cfg.Tasks)
+	}
+}
+
 func TestVersionInfoIncludesInjectedVersion(t *testing.T) {
 	oldVersion, oldCommit, oldDate := version, commit, date
 	t.Cleanup(func() {
@@ -1245,7 +1269,7 @@ func TestRunnerWritesCompletedLog(t *testing.T) {
 	}
 }
 
-func TestRunnerExecutesCommandAsBashScriptAndSourcesBashrc(t *testing.T) {
+func TestRunnerExecutesCommandAsBashScriptWithConfiguredHeader(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export BUILDA_FROM_BASHRC=loaded\n"), 0644); err != nil {
@@ -1254,10 +1278,11 @@ func TestRunnerExecutesCommandAsBashScriptAndSourcesBashrc(t *testing.T) {
 
 	runner := NewRunner(t.TempDir())
 	run, err := runner.Start(TaskConfig{
-		ID:      "bash",
-		Name:    "Bash",
-		Command: `if [[ -n "$BASH_VERSION" ]]; then printf 'shell=bash bashrc=%s\n' "$BUILDA_FROM_BASHRC"; fi`,
-		Timeout: "5s",
+		ID:           "bash",
+		Name:         "Bash",
+		Command:      `if [[ -n "$BASH_VERSION" ]]; then printf 'shell=bash bashrc=%s\n' "$BUILDA_FROM_BASHRC"; fi`,
+		Timeout:      "5s",
+		ScriptHeader: "#!/usr/bin/env bash\nsource \"$HOME/.bashrc\"",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1270,6 +1295,45 @@ func TestRunnerExecutesCommandAsBashScriptAndSourcesBashrc(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "shell=bash bashrc=loaded") {
 		t.Fatalf("expected Bash command to source ~/.bashrc, got:\n%s", data)
+	}
+}
+
+func TestRunnerUsesConfiguredHeaderBeforeCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	toolDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(toolDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	brewPath := filepath.Join(toolDir, "brew")
+	if err := os.WriteFile(brewPath, []byte("#!/usr/bin/env bash\nprintf 'fake brew\\n'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export BUILDA_BREW_PATH=\"$(command -v brew)\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	runner := NewRunner(t.TempDir())
+	run, err := runner.Start(TaskConfig{
+		ID:           "path",
+		Name:         "Path",
+		Command:      `printf 'brew=%s\n' "$BUILDA_BREW_PATH"`,
+		Timeout:      "5s",
+		ScriptHeader: "#!/usr/bin/env bash\nexport PATH=\"" + toolDir + ":$PATH\"\nsource \"$HOME/.bashrc\"",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitForRun(t, run)
+	data, err := os.ReadFile(run.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "brew="+brewPath) {
+		t.Fatalf("expected Bash startup to find prepended tool path, got:\n%s", data)
 	}
 }
 

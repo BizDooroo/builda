@@ -42,12 +42,15 @@ const (
 	defaultListenAddress = ":28088"
 	taskRunWaitParam     = "wait"
 	configReloadInterval = time.Second
+	defaultScriptHeader  = "#!/usr/bin/env bash"
 
 	displayTimeLayout = "06-01-02 15:04:05"
 
 	sampleConfig = `server:
   address: "127.0.0.1:28088"
   log_dir: "logs"
+  script_header: |
+    #!/usr/bin/env bash
 
 tasks:
   - id: "hello"
@@ -80,6 +83,11 @@ Complete config.yaml example:
 
     # Relative paths are resolved from the directory containing config.yaml.
     log_dir: "logs"
+
+    # Header prepended to every task command. Use this to configure shell and
+    # platform-specific startup such as PATH, Homebrew, Git LFS, or direnv.
+    script_header: |
+      #!/usr/bin/env bash
 
     # Set this to enable and protect the Web UI config editor.
     # config_password: "change-me"
@@ -128,6 +136,11 @@ Field reference:
     config editor is disabled. CLI config get/set does not require this
     password.
 
+  server.script_header
+    Optional Bash script header prepended to every task command. Defaults to
+    "#!/usr/bin/env bash". Use this for platform-specific startup such as PATH
+    exports or shell profile sourcing.
+
   tasks[].id
     Required unique task ID. Use URL-safe IDs such as "deploy-staging".
 
@@ -138,9 +151,9 @@ Field reference:
     Optional short text shown in the Web UI.
 
   tasks[].command
-    Required Bash script body. Builda wraps it with #!/usr/bin/env bash,
-    sources ~/.bashrc when present, then runs the configured command. Treat
-    every task as privileged shell execution on the host.
+    Required Bash script body. Builda prepends server.script_header, then runs
+    the configured command. Treat every task as privileged shell execution on
+    the host.
 
   tasks[].timeout
     Optional Go duration such as "30s", "5m", or "1h".
@@ -211,15 +224,17 @@ type ServerConfig struct {
 	Address        string `yaml:"address"`
 	LogDir         string `yaml:"log_dir"`
 	ConfigPassword string `yaml:"config_password"`
+	ScriptHeader   string `yaml:"script_header"`
 }
 
 type TaskConfig struct {
-	ID          string            `yaml:"id"`
-	Name        string            `yaml:"name"`
-	Description string            `yaml:"description"`
-	Command     string            `yaml:"command"`
-	Timeout     string            `yaml:"timeout"`
-	Inputs      []TaskInputConfig `yaml:"inputs"`
+	ID           string            `yaml:"id"`
+	Name         string            `yaml:"name"`
+	Description  string            `yaml:"description"`
+	Command      string            `yaml:"command"`
+	Timeout      string            `yaml:"timeout"`
+	ScriptHeader string            `yaml:"-" json:"script_header,omitempty"`
+	Inputs       []TaskInputConfig `yaml:"inputs"`
 }
 
 type TaskInputConfig struct {
@@ -342,6 +357,9 @@ func main() {
 }
 
 func defaultConfigPath() string {
+	if dir := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); dir != "" {
+		return filepath.Join(dir, "builda", "config.yaml")
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil || strings.TrimSpace(dir) == "" {
 		return "config.yaml"
@@ -507,6 +525,9 @@ func normalizeRuntimeConfig(configPath string, cfg Config) Config {
 		cfg.Server.LogDir = "logs"
 	}
 	cfg.Server.LogDir = resolveLogDir(configPath, cfg.Server.LogDir)
+	for i := range cfg.Tasks {
+		cfg.Tasks[i].ScriptHeader = cfg.Server.ScriptHeader
+	}
 	return cfg
 }
 
@@ -528,6 +549,10 @@ func parseConfig(data []byte) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, err
+	}
+	cfg.Server.ScriptHeader = strings.TrimRight(cfg.Server.ScriptHeader, "\r\n")
+	if strings.TrimSpace(cfg.Server.ScriptHeader) == "" {
+		cfg.Server.ScriptHeader = defaultScriptHeader
 	}
 	seen := map[string]bool{}
 	for i, task := range cfg.Tasks {
@@ -740,21 +765,25 @@ func inputEnv(inputs map[string]string) []string {
 	return env
 }
 
-func taskCommandScript(command string) string {
-	return "#!/usr/bin/env bash\n" +
-		"if [[ -n \"${HOME:-}\" && -f \"$HOME/.bashrc\" ]]; then\n" +
-		"  source \"$HOME/.bashrc\"\n" +
-		"fi\n\n" +
-		command + "\n"
+func taskEnvironment(inputs map[string]string) []string {
+	return append(os.Environ(), inputEnv(inputs)...)
 }
 
-func writeTaskCommandScript(dir, runID, command string) (string, error) {
+func taskCommandScript(header, command string) string {
+	header = strings.TrimRight(header, "\r\n")
+	if strings.TrimSpace(header) == "" {
+		header = defaultScriptHeader
+	}
+	return header + "\n\n" + command + "\n"
+}
+
+func writeTaskCommandScript(dir, runID, header, command string) (string, error) {
 	file, err := os.CreateTemp(dir, runID+"-*.sh")
 	if err != nil {
 		return "", err
 	}
 	path := file.Name()
-	if _, err := file.WriteString(taskCommandScript(command)); err != nil {
+	if _, err := file.WriteString(taskCommandScript(header, command)); err != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
 		return "", err
@@ -919,6 +948,15 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	logPath := run.LogPath
 	taskName := run.TaskName
 	command := run.Command
+	task := run.TaskSnapshot
+	if task.ID == "" {
+		task = TaskConfig{
+			ID:      run.TaskID,
+			Name:    run.TaskName,
+			Command: run.Command,
+			Timeout: run.TimeoutText,
+		}
+	}
 	inputs := cloneInputs(run.Inputs)
 	startedAt := run.StartedAt
 	r.mu.RUnlock()
@@ -938,7 +976,7 @@ func (r *Runner) execute(ctx context.Context, id string) {
 		writeLog(logWriter, "params", formatInputLog(inputs))
 	}
 
-	scriptPath, err := writeTaskCommandScript(r.logDir, id, command)
+	scriptPath, err := writeTaskCommandScript(r.logDir, id, task.ScriptHeader, command)
 	if err != nil {
 		r.finish(id, false, -1, err.Error())
 		return
@@ -946,7 +984,7 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	defer os.Remove(scriptPath)
 
 	cmd := exec.CommandContext(ctx, scriptPath)
-	cmd.Env = append(os.Environ(), inputEnv(inputs)...)
+	cmd.Env = taskEnvironment(inputs)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

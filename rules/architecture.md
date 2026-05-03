@@ -9,6 +9,7 @@
 - Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
 - Keep task run APIs tied to configured task IDs. Do not accept arbitrary command strings through the run API.
 - Task run inputs must be declared on the task config, validated before queueing, persisted on the run, and passed to commands through `BUILDA_INPUT_*` environment variables.
+- Keep platform-specific task shell startup in `server.script_header`, and copy that header onto each runtime task snapshot so queued and historical runs preserve the execution environment used when they were requested.
 - `wait` is reserved as a task run API control query parameter. `wait=1` should block until the queued run reaches a terminal state and return the run log with the response.
 - Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
 - Keep log reads confined to the configured log directory and derive log filenames from run IDs.
