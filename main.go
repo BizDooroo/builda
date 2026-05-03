@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -76,6 +77,9 @@ Complete config.yaml example:
     # Relative paths are resolved from the directory containing config.yaml.
     log_dir: "logs"
 
+    # Set this to enable and protect the Web UI config editor.
+    # config_password: "change-me"
+
   tasks:
     - id: "hello"
       name: "Hello world"
@@ -114,6 +118,12 @@ Field reference:
   server.log_dir
     Directory for run logs and persisted run state. Default is "logs".
 
+  server.config_password
+    Optional password for the Web UI config editor and /api/config. When
+    omitted or empty, the home page hides the config button and the HTTP
+    config editor is disabled. CLI config get/set does not require this
+    password.
+
   tasks[].id
     Required unique task ID. Use URL-safe IDs such as "deploy-staging".
 
@@ -124,8 +134,9 @@ Field reference:
     Optional short text shown in the Web UI.
 
   tasks[].command
-    Required shell command executed as: sh -c <command>. Treat every task as
-    privileged shell execution on the host.
+    Required Bash script body. Builda wraps it with #!/usr/bin/env bash,
+    sources ~/.bashrc when present, then runs the configured command. Treat
+    every task as privileged shell execution on the host.
 
   tasks[].timeout
     Optional Go duration such as "30s", "5m", or "1h".
@@ -193,8 +204,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Address string `yaml:"address"`
-	LogDir  string `yaml:"log_dir"`
+	Address        string `yaml:"address"`
+	LogDir         string `yaml:"log_dir"`
+	ConfigPassword string `yaml:"config_password"`
 }
 
 type TaskConfig struct {
@@ -497,6 +509,20 @@ func normalizeRuntimeConfig(configPath string, cfg Config) Config {
 	return cfg
 }
 
+func configEditingEnabled(cfg Config) bool {
+	return strings.TrimSpace(cfg.Server.ConfigPassword) != ""
+}
+
+func (a *App) currentConfigPassword() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return strings.TrimSpace(a.cfg.Server.ConfigPassword)
+}
+
+func (a *App) configEditingEnabled() bool {
+	return a.currentConfigPassword() != ""
+}
+
 func parseConfig(data []byte) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -713,6 +739,36 @@ func inputEnv(inputs map[string]string) []string {
 	return env
 }
 
+func taskCommandScript(command string) string {
+	return "#!/usr/bin/env bash\n" +
+		"if [[ -n \"${HOME:-}\" && -f \"$HOME/.bashrc\" ]]; then\n" +
+		"  source \"$HOME/.bashrc\"\n" +
+		"fi\n\n" +
+		command + "\n"
+}
+
+func writeTaskCommandScript(dir, runID, command string) (string, error) {
+	file, err := os.CreateTemp(dir, runID+"-*.sh")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if _, err := file.WriteString(taskCommandScript(command)); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
 func NewRunner(logDir string) *Runner {
 	r := &Runner{
 		logDir:    logDir,
@@ -881,7 +937,14 @@ func (r *Runner) execute(ctx context.Context, id string) {
 		writeLog(logWriter, "params", formatInputLog(inputs))
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	scriptPath, err := writeTaskCommandScript(r.logDir, id, command)
+	if err != nil {
+		r.finish(id, false, -1, err.Error())
+		return
+	}
+	defer os.Remove(scriptPath)
+
+	cmd := exec.CommandContext(ctx, scriptPath)
 	cmd.Env = append(os.Environ(), inputEnv(inputs)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
@@ -1125,13 +1188,15 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	logDir := a.logDir
 	hostname := a.hostname
 	started := a.started.Format(displayTimeLayout)
+	configEditing := configEditingEnabled(a.cfg)
 	a.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.pageTmpl.Execute(w, map[string]any{
-		"Hostname": hostname,
-		"LogDir":   logDir,
-		"Started":  started,
+		"Hostname":             hostname,
+		"LogDir":               logDir,
+		"Started":              started,
+		"ConfigEditingEnabled": configEditing,
 	}); err != nil {
 		log.Printf("render page: %v", err)
 	}
@@ -1146,13 +1211,15 @@ func (a *App) handleRunsPage(w http.ResponseWriter, r *http.Request) {
 	logDir := a.logDir
 	hostname := a.hostname
 	started := a.started.Format(displayTimeLayout)
+	configEditing := configEditingEnabled(a.cfg)
 	a.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := a.runsTmpl.Execute(w, map[string]any{
-		"Hostname": hostname,
-		"LogDir":   logDir,
-		"Started":  started,
+		"Hostname":             hostname,
+		"LogDir":               logDir,
+		"Started":              started,
+		"ConfigEditingEnabled": configEditing,
 	}); err != nil {
 		log.Printf("render runs page: %v", err)
 	}
@@ -1183,6 +1250,10 @@ func (a *App) handleRunPage(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/config" {
+		http.NotFound(w, r)
+		return
+	}
+	if !a.configEditingEnabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -1232,6 +1303,9 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeConfigRequest(w, r) {
+		return
+	}
 	a.mu.RLock()
 	configPath := a.configPath
 	a.mu.RUnlock()
@@ -1247,6 +1321,9 @@ func (a *App) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeConfigRequest(w, r) {
+		return
+	}
 	content := r.FormValue("content")
 	if content == "" && r.Body != nil {
 		data, err := io.ReadAll(r.Body)
@@ -1281,6 +1358,29 @@ func (a *App) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
 		"ok":    true,
 		"tasks": cfg.Tasks,
 	})
+}
+
+func (a *App) authorizeConfigRequest(w http.ResponseWriter, r *http.Request) bool {
+	expected := a.currentConfigPassword()
+	if expected == "" {
+		respondJSONStatus(w, http.StatusForbidden, map[string]any{
+			"ok":    false,
+			"error": "config editing is disabled",
+		})
+		return false
+	}
+	password := r.Header.Get("X-Builda-Config-Password")
+	if password == "" {
+		password = r.FormValue("password")
+	}
+	if subtle.ConstantTimeCompare([]byte(password), []byte(expected)) != 1 {
+		respondJSONStatus(w, http.StatusUnauthorized, map[string]any{
+			"ok":    false,
+			"error": "config password did not match",
+		})
+		return false
+	}
+	return true
 }
 
 func (a *App) watchConfig(interval time.Duration) {
@@ -1993,12 +2093,14 @@ const pageTemplate = `<!doctype html>
     <div class="row">
       <div class="server-meta">host {{.Hostname}} · logs {{.LogDir}} · started {{.Started}}</div>
       <a class="button secondary" href="/runs">Runs</a>
+      {{if .ConfigEditingEnabled}}
       <a class="button icon-button" href="/config" aria-label="Edit config" title="Edit config">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 20h9"/>
           <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
         </svg>
       </a>
+      {{end}}
     </div>
   </header>
 
@@ -2722,7 +2824,9 @@ const runsPageTemplate = `<!doctype html>
     <div class="toolbar">
       <div class="server-meta">host {{.Hostname}} · logs {{.LogDir}} · started {{.Started}}</div>
       <a class="button secondary" href="/">Tasks</a>
+      {{if .ConfigEditingEnabled}}
       <a class="button secondary" href="/config">Config</a>
+      {{end}}
     </div>
   </header>
 
@@ -3046,7 +3150,7 @@ const configPageTemplate = `<!doctype html>
       background: #fff;
       color: #171717;
     }
-    .button:focus-visible, button:focus-visible, textarea:focus-visible {
+    .button:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
       outline: 2px solid var(--focus);
       outline-offset: 2px;
     }
@@ -3065,6 +3169,24 @@ const configPageTemplate = `<!doctype html>
       align-items: end;
       justify-content: space-between;
       gap: 16px;
+    }
+    .auth-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    input[type="password"] {
+      min-height: 34px;
+      width: min(320px, 100%);
+      padding: 8px 10px;
+      border: 0;
+      border-radius: 6px;
+      box-shadow: var(--ring);
+      background: #fff;
+      color: #171717;
+      font: inherit;
+      font-size: 14px;
     }
     textarea {
       width: 100%;
@@ -3107,6 +3229,10 @@ const configPageTemplate = `<!doctype html>
         align-items: start;
         flex-direction: column;
       }
+      .auth-row {
+        align-items: stretch;
+        flex-direction: column;
+      }
     }
   </style>
 </head>
@@ -3122,7 +3248,11 @@ const configPageTemplate = `<!doctype html>
           <h1>Config editor</h1>
           <div class="meta">{{.ConfigPath}}</div>
         </div>
-        <button id="save-config">Save</button>
+        <div class="auth-row">
+          <input id="config-password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Config password">
+          <button id="load-config">Load</button>
+          <button id="save-config">Save</button>
+        </div>
       </div>
       <textarea id="config-editor" spellcheck="false"></textarea>
       <div id="config-status" class="editor-status"></div>
@@ -3132,7 +3262,14 @@ const configPageTemplate = `<!doctype html>
   <script>
     const configEditorEl = document.querySelector("#config-editor");
     const configStatusEl = document.querySelector("#config-status");
+    const configPasswordEl = document.querySelector("#config-password");
+    const loadConfigEl = document.querySelector("#load-config");
     const saveConfigEl = document.querySelector("#save-config");
+
+    loadConfigEl.addEventListener("click", async (event) => {
+      event.preventDefault();
+      await loadConfig();
+    });
 
     saveConfigEl.addEventListener("click", async (event) => {
       event.preventDefault();
@@ -3140,21 +3277,42 @@ const configPageTemplate = `<!doctype html>
     });
 
     async function loadConfig() {
-      const response = await fetch("/api/config");
-      if (!response.ok) {
-        configStatus("Failed to load config: " + await response.text(), "error");
+      const password = configPasswordEl.value;
+      if (!password) {
+        configStatus("Password is required.", "error");
         return;
       }
-      const payload = await response.json();
-      configEditorEl.value = payload.content || "";
-      configStatus("", "");
+      loadConfigEl.disabled = true;
+      configStatus("Loading...", "");
+      try {
+        const response = await fetch("/api/config", {
+          headers: {"X-Builda-Config-Password": password}
+        });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          configStatus(payload.error || "Failed to load config.", "error");
+          return;
+        }
+        const payload = await response.json();
+        configEditorEl.value = payload.content || "";
+        configStatus("", "");
+      } catch (error) {
+        configStatus(error.message, "error");
+      } finally {
+        loadConfigEl.disabled = false;
+      }
     }
 
     async function saveConfig() {
+      const password = configPasswordEl.value;
+      if (!password) {
+        configStatus("Password is required.", "error");
+        return;
+      }
       saveConfigEl.disabled = true;
       configStatus("Validating...", "");
       try {
-        const body = new URLSearchParams({content: configEditorEl.value});
+        const body = new URLSearchParams({content: configEditorEl.value, password});
         const response = await fetch("/api/config", {method: "POST", body});
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.ok) {
@@ -3173,7 +3331,7 @@ const configPageTemplate = `<!doctype html>
       configStatusEl.className = "editor-status" + (type ? " " + type : "");
     }
 
-    loadConfig();
+    configStatus("Enter password to load config.", "");
   </script>
 </body>
 </html>`

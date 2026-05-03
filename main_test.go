@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "builda-test-home-")
+	if err == nil {
+		_ = os.Setenv("HOME", home)
+	}
+	code := m.Run()
+	if err == nil {
+		_ = os.RemoveAll(home)
+	}
+	os.Exit(code)
+}
+
 func TestLoadConfigValidatesTasks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -182,8 +194,10 @@ func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 		"Complete config.yaml example:",
 		"server.address",
 		"server.log_dir",
+		"server.config_password",
 		"tasks[].id",
 		"tasks[].command",
+		"Required Bash script body",
 		"tasks[].inputs[].type",
 		"BUILDA_INPUT_TARGET_ENV",
 		"curl -X POST \"http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local\"",
@@ -398,6 +412,38 @@ tasks:
 	if string(data) != string(valid) {
 		t.Fatalf("expected invalid config not to overwrite file, got:\n%s", data)
 	}
+
+	protected := []byte(`
+server:
+  config_password: "secret"
+tasks:
+  - id: "protected"
+    command: "echo protected"
+`)
+	if err := os.WriteFile(configPath, protected, 0644); err != nil {
+		t.Fatal(err)
+	}
+	replacement := []byte(`
+tasks:
+  - id: "replaced"
+    command: "echo replaced"
+`)
+	out.Reset()
+	cmd = newRootCommand()
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetIn(bytes.NewReader(replacement))
+	cmd.SetArgs([]string{"--config", configPath, "config", "set"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config set should not require the web password, got %v", err)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(replacement) {
+		t.Fatalf("expected CLI config set to replace protected config, got:\n%s", data)
+	}
 }
 
 func TestServicePrintLinuxUnit(t *testing.T) {
@@ -569,6 +615,7 @@ tasks:
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Server.ConfigPassword = "secret"
 	app := &App{
 		cfg:        cfg,
 		tasks:      buildTaskMap(cfg.Tasks),
@@ -583,7 +630,7 @@ tasks:
     command: "echo duplicate"
 `
 	rec := httptest.NewRecorder()
-	req := newConfigSaveRequest(invalid)
+	req := newConfigSaveRequest(invalid, "secret")
 	app.handleConfig(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid config to be rejected, got %d", rec.Code)
@@ -597,6 +644,8 @@ tasks:
 	}
 
 	valid := `
+server:
+  config_password: "secret"
 tasks:
   - id: "two"
     name: "Two"
@@ -604,7 +653,21 @@ tasks:
     timeout: "5s"
 `
 	rec = httptest.NewRecorder()
-	req = newConfigSaveRequest(valid)
+	req = newConfigSaveRequest(valid, "wrong")
+	app.handleConfig(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected wrong password to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(initial) {
+		t.Fatalf("expected rejected config not to be saved, got:\n%s", data)
+	}
+
+	rec = httptest.NewRecorder()
+	req = newConfigSaveRequest(valid, "secret")
 	app.handleConfig(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected valid config to be saved, got %d: %s", rec.Code, rec.Body.String())
@@ -618,6 +681,92 @@ tasks:
 	}
 	if _, ok := app.tasks["two"]; !ok {
 		t.Fatalf("expected in-memory task map to be updated, got %#v", app.tasks)
+	}
+}
+
+func TestConfigEndpointRequiresWebPassword(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := []byte(`
+server:
+  config_password: "secret"
+tasks:
+  - id: "one"
+    command: "echo one"
+`)
+	if err := os.WriteFile(path, body, 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseConfig(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		cfg:        cfg,
+		configPath: path,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	app.handleConfig(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing password to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req.Header.Set("X-Builda-Config-Password", "secret")
+	app.handleConfig(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected correct password to load config, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
+	app := &App{
+		cfg:        Config{},
+		pageTmpl:   template.Must(template.New("page").Parse(pageTemplate)),
+		configTmpl: template.Must(template.New("config").Parse(configPageTemplate)),
+		hostname:   "test-host",
+		started:    time.Unix(0, 0),
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	app.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `href="/config"`) {
+		t.Fatalf("expected config button to be hidden without password, got:\n%s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/config", nil)
+	app.handleConfigPage(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected config page to be hidden without password, got %d", rec.Code)
+	}
+
+	app.cfg.Server.ConfigPassword = "secret"
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	app.handleIndex(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `href="/config"`) {
+		t.Fatalf("expected config button with password, got:\n%s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/config", nil)
+	app.handleConfigPage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected config page with password, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `type="password"`) {
+		t.Fatalf("expected password input on config page, got:\n%s", rec.Body.String())
 	}
 }
 
@@ -1050,6 +1199,34 @@ func TestRunnerWritesCompletedLog(t *testing.T) {
 	}
 }
 
+func TestRunnerExecutesCommandAsBashScriptAndSourcesBashrc(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte("export BUILDA_FROM_BASHRC=loaded\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := NewRunner(t.TempDir())
+	run, err := runner.Start(TaskConfig{
+		ID:      "bash",
+		Name:    "Bash",
+		Command: `if [[ -n "$BASH_VERSION" ]]; then printf 'shell=bash bashrc=%s\n' "$BUILDA_FROM_BASHRC"; fi`,
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitForRun(t, run)
+	data, err := os.ReadFile(run.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "shell=bash bashrc=loaded") {
+		t.Fatalf("expected Bash command to source ~/.bashrc, got:\n%s", data)
+	}
+}
+
 func TestRunnerKeepsTaskSnapshot(t *testing.T) {
 	runner := NewRunner(t.TempDir())
 	task := TaskConfig{
@@ -1221,8 +1398,8 @@ func waitForRun(t *testing.T, run *Run) {
 	}
 }
 
-func newConfigSaveRequest(content string) *http.Request {
-	body := url.Values{"content": {content}}.Encode()
+func newConfigSaveRequest(content, password string) *http.Request {
+	body := url.Values{"content": {content}, "password": {password}}.Encode()
 	req := httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	return req

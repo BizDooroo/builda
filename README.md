@@ -8,7 +8,7 @@ Builda is a small Go web server for running preconfigured shell tasks from `conf
 
 The repository is safe to publish from a secret-scanning perspective as of the latest local check: `gitleaks detect --source . --no-banner --redact --verbose` reported no leaks.
 
-Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured commands with `sh -c`, and the Web UI includes a config editor that can change those commands. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
+Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured commands as Bash scripts, and the Web UI can include a config editor that changes those commands. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
 
 Binding to `:28088` or `0.0.0.0:28088` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
 
@@ -28,7 +28,7 @@ go install github.com/BizDooroo/builda@v0.1.0
 
 Prebuilt binaries are published on the [GitHub Releases page](https://github.com/BizDooroo/builda/releases) for Linux and macOS on `amd64` and `arm64`. Download the archive for your platform, unpack it, and run the `builda` binary.
 
-Windows binaries are not published by default because Builda executes tasks through `sh -c`; Windows users need a POSIX-compatible shell environment.
+Windows binaries are not published by default because Builda executes tasks through `/usr/bin/env bash`; Windows users need a POSIX-compatible shell environment with Bash.
 
 ## Run
 
@@ -80,7 +80,7 @@ builda --config config.yaml config set new-config.yaml
 cat new-config.yaml | builda --config config.yaml config set
 ```
 
-`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file. A running Builda server reloads the changed config file automatically, so task changes become available without restarting the daemon.
+`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file. CLI config commands are intended for administrators and do not require the Web UI config password. A running Builda server reloads the changed config file automatically, so task changes become available without restarting the daemon.
 
 During development from this repository, use the checked-in sample config explicitly:
 
@@ -151,6 +151,8 @@ Tasks are managed in YAML:
 server:
   address: "127.0.0.1:28088"
   log_dir: "logs"
+  # Set this to enable and protect the Web UI config editor.
+  # config_password: "change-me"
 
 tasks:
   - id: "hello"
@@ -177,10 +179,11 @@ Fields:
 
 - `server.address`: HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
 - `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
+- `server.config_password`: optional password for the Web UI config editor and `/api/config`. When omitted or empty, the home page hides the config button and the HTTP config editor is disabled.
 - `tasks[].id`: stable task identifier used by the UI and API.
 - `tasks[].name`: display name. Defaults to `id` when omitted.
 - `tasks[].description`: optional short description shown in the task list.
-- `tasks[].command`: shell command executed via `sh -c`.
+- `tasks[].command`: Bash script body. Builda wraps it with `#!/usr/bin/env bash`, sources `~/.bashrc` when present, then runs the configured command.
 - `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
 - `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
 
@@ -194,7 +197,7 @@ Open `/runs` for the full run list workspace. The run list shows request time, s
 
 Open `/runs?task=hello` to show only runs for one task in the run list workspace.
 
-The config editor is available at `/config`.
+When `server.config_password` is set, the config editor is available at `/config` and requires that password before loading or saving YAML. When the password is omitted, the home page does not show the config button and the HTTP config editor is disabled.
 
 ## API
 
@@ -228,8 +231,8 @@ Other useful endpoints:
 - `GET /api/runs/{runID}`: one run summary.
 - `POST /api/runs/{runID}/cancel`: cancel a queued or running task.
 - `GET /api/runs/{runID}/log`: run log text.
-- `GET /api/config`: current YAML config.
-- `POST /api/config`: save YAML config after validation.
+- `GET /api/config`: current YAML config, only when the Web UI config password is provided.
+- `POST /api/config`: save YAML config after validation, only when the Web UI config password is provided.
 
 ## Persistence
 
