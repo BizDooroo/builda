@@ -105,13 +105,27 @@ main {
   text-align: left;
   box-shadow: var(--shadow-border);
   cursor: pointer;
-  transition: transform 0.16s ease, box-shadow 0.16s ease;
+  transition: background 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
 }
 
 .run-item:hover,
 .run-item.active {
   transform: translateY(-1px);
   box-shadow: var(--shadow-card);
+}
+
+.run-item.active {
+  background: var(--fg);
+  color: var(--canvas);
+}
+
+.run-item.active .run-name {
+  color: var(--canvas);
+}
+
+.run-item.active .meta,
+.run-item.active .run-time-grid {
+  color: var(--border-muted);
 }
 
 .run-time-grid {
@@ -234,10 +248,6 @@ pre {
   .shell-context {
     justify-content: space-between;
     width: 100%;
-  }
-
-  .server-meta {
-    max-width: 100%;
   }
 
   main {

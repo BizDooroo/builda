@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
+func TestRunsPageRendersWorkspace(t *testing.T) {
 	app := &App{
 		logDir:   "logs",
 		hostname: "test-host",
@@ -22,14 +22,15 @@ func TestRunsPageRendersWorkspaceWithHostname(t *testing.T) {
 		t.Fatalf("expected runs page to render, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `data-server-meta`) {
-		t.Fatalf("expected runs page to render server meta hook, got:\n%s", body)
+	if strings.Contains(body, `data-server-meta`) {
+		t.Fatalf("expected runs page not to render server meta hook, got:\n%s", body)
 	}
 	if !strings.Contains(body, `id="run-picker"`) {
 		t.Fatalf("expected runs page to render mobile picker, got:\n%s", body)
 	}
 	assertEmbeddedWebContains(t, "/api/state?task=")
-	assertEmbeddedWebContains(t, "params ")
+	assertEmbeddedWebContains(t, "param-chip")
+	assertEmbeddedWebContains(t, "log-param-line")
 	assertEmbeddedWebContains(t, "duration ")
 }
 
@@ -69,7 +70,8 @@ func TestRunPageRendersParamsHeaderHook(t *testing.T) {
 			t.Fatalf("expected run page to include %q, got:\n%s", expected, body)
 		}
 	}
-	assertEmbeddedWebContains(t, "params ")
+	assertEmbeddedWebContains(t, "param-list")
+	assertEmbeddedWebContains(t, "param-chip")
 	assertEmbeddedWebContains(t, "/api/runs/")
 
 	rec = httptest.NewRecorder()

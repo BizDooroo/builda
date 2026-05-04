@@ -373,6 +373,55 @@ code {
   color: var(--muted);
 }
 
+.param-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 6px;
+}
+
+.param-chip {
+  max-width: 100%;
+  min-height: 24px;
+  padding: 4px 8px;
+  background: var(--canvas-subtle);
+  color: var(--fg);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.log-line {
+  display: block;
+  min-height: 1.55em;
+}
+
+.log-param-line {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  white-space: normal;
+}
+
+.log-prefix {
+  color: #8b949e;
+  white-space: pre;
+}
+
+.log-param-list {
+  display: inline-flex;
+  margin-top: 0;
+}
+
+.log-param-line .param-chip {
+  background: #21262d;
+  color: #f0f6fc;
+  box-shadow: inset 0 0 0 1px rgba(240, 246, 252, 0.16);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;

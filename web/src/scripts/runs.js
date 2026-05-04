@@ -7,6 +7,7 @@ import {
   initShell,
   isActiveStatus,
   isFailedStatus,
+  renderLogText,
   renderRunListTimes,
   renderRunParams,
   renderStatusBadge,
@@ -34,6 +35,7 @@ let selectedRunID = params.get("run") || "";
 let latestRuns = [];
 let visibleRuns = [];
 let followLog = true;
+let currentLogText = logEl.textContent;
 
 runsEl.classList.add("responsive-picker");
 
@@ -78,7 +80,7 @@ document.addEventListener("click", async (event) => {
 copyLogEl.addEventListener("click", async () => {
   copyLogEl.disabled = true;
   try {
-    await copyText(logEl.textContent);
+    await copyText(currentLogText);
     flashButtonText(copyLogEl, "복사됨");
     showNotice(runsStatusEl, "로그를 복사했습니다.", "ok");
   } catch (error) {
@@ -120,7 +122,8 @@ async function refresh() {
     if (!visibleRuns.length) {
       renderRuns(latestRuns);
       summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
-      logEl.textContent = emptyRunMessage();
+      currentLogText = emptyRunMessage();
+      logEl.textContent = currentLogText;
       return;
     }
     if (!selectedRunID || !visibleRuns.some((run) => run.id === selectedRunID)) {
@@ -178,7 +181,8 @@ async function selectRun(runID, push) {
 async function renderSelectedRun() {
   if (!selectedRunID) {
     summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
-    logEl.textContent = emptyRunMessage();
+    currentLogText = emptyRunMessage();
+    logEl.textContent = currentLogText;
     return;
   }
   try {
@@ -200,7 +204,8 @@ async function renderSelectedRun() {
       '<details class="script-details"><summary>스크립트 보기</summary><code>' + escapeHTML(run.script) + "</code></details>";
     if (!logResponse.ok) throw new Error(await logResponse.text());
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-    logEl.textContent = await logResponse.text();
+    currentLogText = await logResponse.text();
+    logEl.innerHTML = renderLogText(currentLogText);
     if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
     showNotice(runsStatusEl, "선택한 실행을 불러오지 못했습니다: " + error.message, "error");

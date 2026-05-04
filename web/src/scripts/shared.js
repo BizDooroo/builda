@@ -8,26 +8,12 @@ export async function initShell() {
     renderShellMeta(meta);
     return meta;
   } catch (error) {
-    const target = document.querySelector("[data-server-meta]");
-    if (target) {
-      target.textContent = "server unavailable";
-    }
     console.error("load meta failed", error);
     return {};
   }
 }
 
 export function renderShellMeta(meta) {
-  const target = document.querySelector("[data-server-meta]");
-  if (target) {
-    const pieces = [];
-    if (meta.hostname) pieces.push("host " + meta.hostname);
-    if (meta.log_dir) pieces.push("logs " + meta.log_dir);
-    if (meta.config_path && document.body.dataset.headerMode !== "default") pieces.push("config " + meta.config_path);
-    if (meta.started) pieces.push("started " + meta.started);
-    target.textContent = pieces.join(" · ") || "Builda";
-  }
-
   document.querySelectorAll("[data-config-link]").forEach((link) => {
     link.hidden = !meta.config_editing_enabled;
   });
@@ -146,18 +132,50 @@ export function renderRunListTimes(run) {
 }
 
 export function renderRunParams(run) {
-  const formatted = formatRunParams(run.inputs);
-  if (!formatted) return "";
-  return '<div class="meta">params ' + escapeHTML(formatted) + "</div>";
+  const chips = renderRunParamChips(run.inputs);
+  if (!chips) return "";
+  return '<div class="param-list" aria-label="Run parameters">' + chips + "</div>";
 }
 
-export function formatRunParams(inputs) {
-  if (!inputs || typeof inputs !== "object" || !Object.keys(inputs).length) return "";
-  const sorted = {};
-  Object.keys(inputs).sort().forEach((key) => {
-    sorted[key] = inputs[key];
-  });
-  return JSON.stringify(sorted);
+export function renderRunParamChips(inputs) {
+  const pairs = runParamPairs(inputs);
+  if (!pairs.length) return "";
+  return pairs.map(([key, value]) => {
+    const label = String(key) + "=" + String(value ?? "");
+    return '<span class="chip param-chip">' + escapeHTML(label) + "</span>";
+  }).join("");
+}
+
+function runParamPairs(inputs) {
+  if (!inputs || typeof inputs !== "object") return [];
+  return Object.keys(inputs).sort().map((key) => [key, inputs[key]]);
+}
+
+export function renderLogText(logText) {
+  return String(logText ?? "").split("\n").map(renderLogLine).join("");
+}
+
+function renderLogLine(line) {
+  if (line === "") return '<span class="log-line"></span>';
+  const paramLine = renderLogParamLine(line);
+  if (paramLine) return paramLine;
+  return '<span class="log-line">' + escapeHTML(line) + "</span>";
+}
+
+function renderLogParamLine(line) {
+  const match = line.match(/^(\[[^\]]+\]\s+)params\s+(.+)$/);
+  if (!match) return "";
+  try {
+    const inputs = JSON.parse(match[2]);
+    const chips = renderRunParamChips(inputs);
+    if (!chips) return "";
+    return '<span class="log-line log-param-line">' +
+      '<span class="log-prefix">' + escapeHTML(match[1] + "params") + "</span>" +
+      '<span class="param-list log-param-list" aria-label="Run parameters">' + chips + "</span>" +
+      "</span>";
+  } catch {
+    return "";
+  }
 }
 
 export function formatElapsed(run) {

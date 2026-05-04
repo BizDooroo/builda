@@ -2,10 +2,11 @@ import {
   copyText,
   escapeHTML,
   flashButtonText,
-  formatRunParams,
   formatTime,
   initShell,
   isActiveStatus,
+  renderLogText,
+  renderRunParamChips,
   showNotice,
   statusLabel,
 } from "./shared.js";
@@ -27,6 +28,7 @@ const canceledEl = document.querySelector("#canceled");
 const paramsEl = document.querySelector("#params");
 let timer = 0;
 let followLog = true;
+let currentLogText = logEl.textContent;
 
 cancelRunEl.addEventListener("click", async () => {
   if (!confirm("이 실행을 취소할까요? 이미 시작된 스크립트가 중단될 수 있습니다.")) return;
@@ -46,7 +48,7 @@ cancelRunEl.addEventListener("click", async () => {
 copyLogEl.addEventListener("click", async () => {
   copyLogEl.disabled = true;
   try {
-    await copyText(logEl.textContent);
+    await copyText(currentLogText);
     flashButtonText(copyLogEl, "복사됨");
     showNotice(runStatusEl, "로그를 복사했습니다.", "ok");
   } catch (error) {
@@ -90,13 +92,13 @@ async function refresh() {
     startedEl.textContent = "start " + formatTime(run.started_at);
     finishedEl.textContent = "finished " + formatTime(run.finished_at);
     canceledEl.textContent = "cancelled " + formatTime(run.canceled_at);
-    const formattedParams = formatRunParams(run.inputs);
-    if (formattedParams) {
+    const paramChips = renderRunParamChips(run.inputs);
+    if (paramChips) {
       paramsEl.hidden = false;
-      paramsEl.textContent = "params " + formattedParams;
+      paramsEl.innerHTML = paramChips;
     } else {
       paramsEl.hidden = true;
-      paramsEl.textContent = "";
+      paramsEl.innerHTML = "";
     }
     if (run.status !== "QUEUED" && run.status !== "RUNNING" && timer) {
       clearInterval(timer);
@@ -104,7 +106,8 @@ async function refresh() {
     }
     if (!logResponse.ok) throw new Error(await logResponse.text());
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-    logEl.textContent = await logResponse.text();
+    currentLogText = await logResponse.text();
+    logEl.innerHTML = renderLogText(currentLogText);
     if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
     showNotice(runStatusEl, "실행 정보를 불러오지 못했습니다: " + error.message, "error");

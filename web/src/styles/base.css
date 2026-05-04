@@ -184,7 +184,6 @@ textarea:focus-visible {
   color: var(--fg);
 }
 
-.server-meta,
 .meta,
 .count,
 .times,
@@ -198,19 +197,11 @@ code,
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, ui-monospace, monospace;
 }
 
-.server-meta,
 .meta,
 .count {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.server-meta {
-  max-width: min(46vw, 720px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sr-only {
