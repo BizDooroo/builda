@@ -5,6 +5,7 @@
 - Cobra command setup belongs in `cli.go`, with service command setup and platform details in `service*.go`.
 - The runner executes one task at a time. New task starts append `QUEUED` runs, and `dispatchLocked` starts the next queued run only when no run is active.
 - Persist run state in `log_dir/runs.json`. On restart, convert stale `RUNNING` runs to `ABORTED` and resume queued runs.
+- Bound completed run history with `server.max_history`, defaulting to 5000. Prune only terminal runs and keep queued/running runs even when they exceed the cap.
 - Resolve relative `server.log_dir` paths from the directory containing the active config file, not from the process working directory.
 - Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
 - Keep task run APIs tied to configured task IDs. Do not accept arbitrary script strings through the run API.

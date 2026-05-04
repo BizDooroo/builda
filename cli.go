@@ -195,7 +195,7 @@ func runServer(configPath string, addrs []string, ensureConfig bool) error {
 		hostname = "unknown-host"
 	}
 
-	runner := NewRunner(cfg.Server.LogDir)
+	runner := NewRunner(cfg.Server.LogDir, cfg.Server.MaxHistory)
 	app := &App{
 		cfg:        cfg,
 		tasks:      buildTaskMap(cfg.Tasks),

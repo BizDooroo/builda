@@ -19,6 +19,7 @@ const (
 	StatusAborted  = "ABORTED"
 
 	defaultListenAddress = ":28088"
+	defaultMaxHistory    = 5000
 	taskRunWaitParam     = "wait"
 	configReloadInterval = time.Second
 	defaultScriptHeader  = "#!/usr/bin/env bash"
@@ -29,6 +30,7 @@ const (
   addresses:
     - "127.0.0.1:28088"
   log_dir: "logs"
+  max_history: 5000
   script_header: |
     #!/usr/bin/env bash
 
@@ -64,6 +66,9 @@ Complete config.yaml example:
 
     # Relative paths are resolved from the directory containing config.yaml.
     log_dir: "logs"
+
+    # Maximum number of completed run history entries to retain.
+    max_history: 5000
 
     # Header prepended to every task script. Use this to configure shell and
     # platform-specific startup such as PATH, Homebrew, Git LFS, or direnv.
@@ -116,6 +121,10 @@ Field reference:
 
   server.log_dir
     Directory for run logs and persisted run state. Default is "logs".
+
+  server.max_history
+    Maximum number of completed run history entries to retain in runs.json.
+    Defaults to 5000. Queued and running runs are always retained.
 
   server.config_password
     Optional password for the Web UI config editor and /api/config. When

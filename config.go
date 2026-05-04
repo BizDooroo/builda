@@ -196,6 +196,12 @@ func parseConfig(data []byte) (Config, error) {
 	if strings.TrimSpace(cfg.Server.ScriptHeader) == "" {
 		cfg.Server.ScriptHeader = defaultScriptHeader
 	}
+	if cfg.Server.MaxHistory < 0 {
+		return Config{}, fmt.Errorf("server.max_history must be zero or greater")
+	}
+	if cfg.Server.MaxHistory == 0 {
+		cfg.Server.MaxHistory = defaultMaxHistory
+	}
 	seen := map[string]bool{}
 	for i, task := range cfg.Tasks {
 		script := strings.TrimSpace(task.Script)

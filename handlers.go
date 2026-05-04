@@ -265,7 +265,12 @@ func (a *App) applyConfig(cfg Config, stamp fileStamp) {
 	a.cfg = cfg
 	a.tasks = buildTaskMap(cfg.Tasks)
 	a.configFile = stamp
+	runner := a.runner
 	a.mu.Unlock()
+
+	if runner != nil {
+		runner.SetMaxHistory(cfg.Server.MaxHistory)
+	}
 }
 
 func (a *App) handleStart(w http.ResponseWriter, r *http.Request) {

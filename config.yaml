@@ -1,36 +1,76 @@
+# Server settings for the Builda HTTP process.
 server:
+  # Backward-compatible single listen address.
+  address: "127.0.0.1:28088"
+
+  # Additional listen addresses; keep them on trusted interfaces.
   addresses:
-    - "127.0.0.1:28088"
+    - "127.0.0.1:28089"
+
+  # Directory for run logs and runs.json; relative to this config file.
   log_dir: "logs"
 
+  # Maximum completed run records to keep.
+  max_history: 5000
+
+  # Password for the Web UI config editor; empty disables it.
+  config_password: ""
+
+  # Shell header prepended to each task script.
+  script_header: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+# Task definitions exposed in the Web UI and API.
 tasks:
+  # Stable task ID used in URLs and persisted history.
   - id: "hello"
+    # Display name shown in the Web UI.
     name: "Hello world"
-    description: "Print a greeting, wait briefly, and show the current time"
-    script: "echo \"Hello ${BUILDA_INPUT_NAME} from ${BUILDA_INPUT_ENVIRONMENT}\"; sleep 1; date"
+    # Short summary shown in task lists.
+    description: "Print a greeting"
+    # Bash script body executed by Builda.
+    script: 'echo "Hello ${BUILDA_INPUT_NAME} from ${BUILDA_INPUT_ENVIRONMENT}"'
+    # Maximum runtime before Builda cancels the task.
     timeout: "30s"
+    # Declared inputs accepted by the run API.
     inputs:
+      # Input ID mapped to BUILDA_INPUT_NAME.
       - id: "name"
+        # Display name for this input.
         name: "Name"
+        # Help text shown near this input.
+        description: "Name to print"
+        # Free-form string input.
         type: "string"
-        default: "builda"
+        # Value used when the caller omits this input.
+        default: "Builda"
+        # Require a non-empty value.
+        required: true
+
+      # Input ID mapped to BUILDA_INPUT_ENVIRONMENT.
       - id: "environment"
+        # Display name for this input.
         name: "Environment"
+        # Help text shown near this input.
+        description: "Target label to print"
+        # Select one value from options.
         type: "choice"
+        # Value selected by default.
         default: "local"
+        # Allowed values for this choice input.
         options:
           - "local"
           - "staging"
           - "prod"
 
+  # Stable task ID used in URLs and persisted history.
   - id: "list-files"
-    name: "List repository files"
-    description: "List files under the repository root"
+    # Display name shown in the Web UI.
+    name: "List files"
+    # Short summary shown in task lists.
+    description: "Show repository files"
+    # Bash script body executed by Builda.
     script: "find . -maxdepth 2 -type f | sort"
-    timeout: "30s"
-
-  - id: "slow-count"
-    name: "Slow count"
-    description: "Print five count lines with a one-second pause"
-    script: "for i in 1 2 3 4 5; do echo count=$i; sleep 1; done"
+    # Maximum runtime before Builda cancels the task.
     timeout: "10s"

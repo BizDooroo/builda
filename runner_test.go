@@ -209,6 +209,115 @@ func TestRunnerQueuesOneRunAtATime(t *testing.T) {
 	}
 }
 
+func TestRunnerPrunesCompletedHistory(t *testing.T) {
+	dir := t.TempDir()
+	runner := NewRunner(dir, 2)
+	first, err := runner.Start(TaskConfig{
+		ID:      "first",
+		Name:    "First",
+		Script:  "echo first",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, first)
+
+	second, err := runner.Start(TaskConfig{
+		ID:      "second",
+		Name:    "Second",
+		Script:  "echo second",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, second)
+
+	third, err := runner.Start(TaskConfig{
+		ID:      "third",
+		Name:    "Third",
+		Script:  "echo third",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, third)
+
+	runs := runner.Snapshot()
+	if len(runs) != 2 {
+		t.Fatalf("expected two retained runs, got %#v", runs)
+	}
+	ids := map[string]bool{}
+	for _, run := range runs {
+		ids[run.ID] = true
+	}
+	if ids[first.ID] || !ids[second.ID] || !ids[third.ID] {
+		t.Fatalf("expected oldest run pruned and two newest retained, got %#v", ids)
+	}
+	if _, ok := runner.Find(first.ID); ok {
+		t.Fatalf("expected pruned run %q to be unavailable", first.ID)
+	}
+	if _, err := os.Stat(first.LogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected pruned log to be removed, got %v", err)
+	}
+}
+
+func TestRunnerKeepsActiveRunsBeyondHistoryLimit(t *testing.T) {
+	runner := NewRunner(t.TempDir(), 1)
+	completed, err := runner.Start(TaskConfig{
+		ID:      "done",
+		Name:    "Done",
+		Script:  "echo done",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, completed)
+
+	running, err := runner.Start(TaskConfig{
+		ID:      "running",
+		Name:    "Running",
+		Script:  "sleep 10",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := runner.Start(TaskConfig{
+		ID:      "queued",
+		Name:    "Queued",
+		Script:  "echo queued",
+		Timeout: "5s",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runs := runner.Snapshot()
+	if len(runs) != 3 {
+		t.Fatalf("expected completed, running, and queued runs, got %#v", runs)
+	}
+	statuses := map[string]string{}
+	for _, run := range runs {
+		statuses[run.ID] = run.Status
+	}
+	if statuses[completed.ID] != StatusSuccess || statuses[running.ID] != StatusRunning || statuses[queued.ID] != StatusQueued {
+		t.Fatalf("expected active runs retained beyond history limit, got %#v", statuses)
+	}
+
+	if !runner.Cancel(running.ID) {
+		t.Fatalf("expected running run to cancel")
+	}
+	if !runner.Cancel(queued.ID) {
+		t.Fatalf("expected queued run to cancel")
+	}
+	waitForRun(t, running)
+	waitForRun(t, queued)
+}
+
 func TestRunnerPersistsStateAndAbortsInProgressOnRestart(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "runs.json")

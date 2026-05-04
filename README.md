@@ -45,7 +45,7 @@ On first run, Builda creates a default config at the operating system's user con
 - Linux: `$XDG_CONFIG_HOME/builda/config.yaml` or `~/.config/builda/config.yaml`
 - macOS: `~/Library/Application Support/builda/config.yaml`
 
-The sample config uses `server.log_dir: "logs"`, and relative log directories are resolved from the config file directory. With the default config, run logs and `runs.json` are stored under the same Builda config directory, for example `~/.config/builda/logs`.
+The sample config uses `server.log_dir: "logs"`, and relative log directories are resolved from the config file directory. With the default config, run logs and `runs.json` are stored under the same Builda config directory, for example `~/.config/builda/logs`. Builda keeps at most `server.max_history` completed run records, defaulting to 5000, and always preserves queued and running runs.
 
 Run with an explicit config file:
 
@@ -152,6 +152,7 @@ server:
   addresses:
     - "127.0.0.1:28088"
   log_dir: "logs"
+  max_history: 5000
   script_header: |
     #!/usr/bin/env bash
   # Set this to enable and protect the Web UI config editor.
@@ -183,6 +184,7 @@ Fields:
 - `server.address`: single HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
 - `server.addresses`: optional list of HTTP listen addresses used when `--addr` is not provided. Use this to bind multiple specific interfaces, such as `127.0.0.1:28088` and `192.168.0.40:28088`.
 - `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
+- `server.max_history`: maximum number of completed run history entries to retain in `runs.json`. Defaults to `5000`; queued and running runs are always retained.
 - `server.config_password`: optional password for the Web UI config editor and `/api/config`. When omitted or empty, the home page hides the config button and the HTTP config editor is disabled.
 - `server.script_header`: optional Bash script header prepended to every task script. Defaults to `#!/usr/bin/env bash`. Use this for platform-specific startup such as `PATH` exports or shell profile sourcing.
 - `tasks[].id`: stable task identifier used by the UI and API.

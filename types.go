@@ -18,6 +18,7 @@ type ServerConfig struct {
 	Address        string   `yaml:"address"`
 	Addresses      []string `yaml:"addresses"`
 	LogDir         string   `yaml:"log_dir"`
+	MaxHistory     int      `yaml:"max_history"`
 	ConfigPassword string   `yaml:"config_password"`
 	ScriptHeader   string   `yaml:"script_header"`
 }
@@ -55,12 +56,13 @@ type App struct {
 }
 
 type Runner struct {
-	mu        sync.RWMutex
-	logDir    string
-	statePath string
-	runs      []*Run
-	byID      map[string]*Run
-	activeID  string
+	mu         sync.RWMutex
+	logDir     string
+	statePath  string
+	maxHistory int
+	runs       []*Run
+	byID       map[string]*Run
+	activeID   string
 }
 
 type Run struct {

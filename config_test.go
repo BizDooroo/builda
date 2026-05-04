@@ -35,6 +35,9 @@ tasks:
 	if cfg.Tasks[0].Description != "First task" {
 		t.Fatalf("expected description to be preserved, got %q", cfg.Tasks[0].Description)
 	}
+	if cfg.Server.MaxHistory != defaultMaxHistory {
+		t.Fatalf("expected max history to default to %d, got %d", defaultMaxHistory, cfg.Server.MaxHistory)
+	}
 }
 
 func TestParseConfigRejectsInvalidTimeout(t *testing.T) {
@@ -46,6 +49,33 @@ tasks:
 `))
 	if err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("expected timeout validation error, got %v", err)
+	}
+}
+
+func TestParseConfigValidatesMaxHistory(t *testing.T) {
+	cfg, err := parseConfig([]byte(`
+server:
+  max_history: 42
+tasks:
+  - id: "ok"
+    script: "echo ok"
+`))
+	if err != nil {
+		t.Fatalf("parseConfig returned error: %v", err)
+	}
+	if cfg.Server.MaxHistory != 42 {
+		t.Fatalf("expected max history to be preserved, got %d", cfg.Server.MaxHistory)
+	}
+
+	_, err = parseConfig([]byte(`
+server:
+  max_history: -1
+tasks:
+  - id: "bad"
+    script: "echo bad"
+`))
+	if err == nil || !strings.Contains(err.Error(), "max_history") {
+		t.Fatalf("expected max_history validation error, got %v", err)
 	}
 }
 
@@ -192,6 +222,23 @@ func TestSampleConfigIsValid(t *testing.T) {
 	}
 }
 
+func TestRepositoryExampleConfigIsValid(t *testing.T) {
+	data, err := os.ReadFile("config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := parseConfig(data)
+	if err != nil {
+		t.Fatalf("repository config example must be valid: %v", err)
+	}
+	if cfg.Server.Address == "" || len(cfg.Server.Addresses) == 0 || cfg.Server.MaxHistory != defaultMaxHistory {
+		t.Fatalf("expected example config to cover server settings, got %#v", cfg.Server)
+	}
+	if len(cfg.Tasks) == 0 || len(cfg.Tasks[0].Inputs) == 0 {
+		t.Fatalf("expected example config to cover task inputs, got %#v", cfg.Tasks)
+	}
+}
+
 func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "builda", "config.yaml")
 	help := helpText(configPath)
@@ -202,6 +249,7 @@ func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 		"server.address",
 		"server.addresses",
 		"server.log_dir",
+		"server.max_history",
 		"server.config_password",
 		"tasks[].id",
 		"tasks[].script",

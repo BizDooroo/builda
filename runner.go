@@ -72,11 +72,15 @@ func writeTaskScript(dir, runID, header, script string) (string, error) {
 	return path, nil
 }
 
-func NewRunner(logDir string) *Runner {
+func NewRunner(logDir string, maxHistory ...int) *Runner {
 	r := &Runner{
-		logDir:    logDir,
-		statePath: filepath.Join(logDir, "runs.json"),
-		byID:      map[string]*Run{},
+		logDir:     logDir,
+		statePath:  filepath.Join(logDir, "runs.json"),
+		maxHistory: defaultMaxHistory,
+		byID:       map[string]*Run{},
+	}
+	if len(maxHistory) > 0 {
+		r.maxHistory = normalizeMaxHistory(maxHistory[0])
 	}
 	if err := r.loadState(); err != nil {
 		log.Printf("load run state: %v", err)
@@ -85,6 +89,25 @@ func NewRunner(logDir string) *Runner {
 	r.dispatchLocked()
 	r.mu.Unlock()
 	return r
+}
+
+func normalizeMaxHistory(maxHistory int) int {
+	if maxHistory <= 0 {
+		return defaultMaxHistory
+	}
+	return maxHistory
+}
+
+func (r *Runner) SetMaxHistory(maxHistory int) {
+	r.mu.Lock()
+	next := normalizeMaxHistory(maxHistory)
+	if r.maxHistory == next {
+		r.mu.Unlock()
+		return
+	}
+	r.maxHistory = next
+	r.saveLocked()
+	r.mu.Unlock()
 }
 
 func (r *Runner) Start(task TaskConfig, inputs map[string]string) (*Run, error) {
@@ -171,6 +194,7 @@ func (r *Runner) loadState() error {
 }
 
 func (r *Runner) saveLocked() {
+	pruned := r.pruneHistoryLocked()
 	data, err := json.MarshalIndent(r.runs, "", "  ")
 	if err != nil {
 		log.Printf("marshal run state: %v", err)
@@ -178,6 +202,53 @@ func (r *Runner) saveLocked() {
 	}
 	if err := writeFileAtomic(r.statePath, data, 0644); err != nil {
 		log.Printf("write run state: %v", err)
+		return
+	}
+	r.removePrunedLogs(pruned)
+}
+
+func (r *Runner) pruneHistoryLocked() []*Run {
+	maxHistory := normalizeMaxHistory(r.maxHistory)
+	r.maxHistory = maxHistory
+
+	terminalCount := 0
+	for _, run := range r.runs {
+		if run != nil && isTerminal(run.Status) {
+			terminalCount++
+		}
+	}
+	removeCount := terminalCount - maxHistory
+	if removeCount <= 0 {
+		return nil
+	}
+
+	pruned := make([]*Run, 0, removeCount)
+	kept := r.runs[:0]
+	for _, run := range r.runs {
+		if removeCount > 0 && run != nil && isTerminal(run.Status) {
+			pruned = append(pruned, run)
+			delete(r.byID, run.ID)
+			removeCount--
+			continue
+		}
+		kept = append(kept, run)
+	}
+	for i := len(kept); i < len(r.runs); i++ {
+		r.runs[i] = nil
+	}
+	r.runs = kept
+	return pruned
+}
+
+func (r *Runner) removePrunedLogs(pruned []*Run) {
+	for _, run := range pruned {
+		if run == nil || run.ID == "" {
+			continue
+		}
+		path := filepath.Join(r.logDir, filepath.Base(run.ID)+".log")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("remove pruned run log %s: %v", path, err)
+		}
 	}
 }
 
