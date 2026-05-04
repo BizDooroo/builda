@@ -2,8 +2,9 @@
 import AppShell from "../layouts/AppShell.astro";
 ---
 
-<AppShell title="Run · Builda" backHref="/runs" backLabel="Back" headerMode="run-detail">
-  <main class="run-detail-grid">
+<AppShell title="Run · Builda" backHref="/runs" backLabel="뒤로" headerMode="run-detail">
+  <main class="workspace run-detail-grid">
+    <div id="run-status" class="notice" role="status" aria-live="polite" hidden></div>
     <section class="summary">
       <div class="summary-head">
         <div class="summary-title">
@@ -11,9 +12,15 @@ import AppShell from "../layouts/AppShell.astro";
           <div class="meta" id="run-id"></div>
           <div class="meta" id="params" hidden></div>
         </div>
-        <span class="badge" id="badge">loading</span>
+        <div class="summary-actions">
+          <span class="badge" id="badge">loading</span>
+          <button class="danger" id="cancel-run" type="button" hidden>취소</button>
+        </div>
       </div>
-      <code id="script"></code>
+      <details class="script-details">
+        <summary>스크립트 보기</summary>
+        <code id="script"></code>
+      </details>
       <div class="times">
         <span id="requested">request -</span>
         <span id="started">start -</span>
@@ -21,7 +28,16 @@ import AppShell from "../layouts/AppShell.astro";
         <span id="canceled">cancelled -</span>
       </div>
     </section>
-    <pre id="log">Loading log...</pre>
+    <section class="log-panel">
+      <div class="log-toolbar">
+        <h2>로그</h2>
+        <div class="toolbar">
+          <button id="copy-log" class="secondary compact" type="button">로그 복사</button>
+          <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow on</button>
+        </div>
+      </div>
+      <pre id="log" tabindex="0">Loading log...</pre>
+    </section>
   </main>
 
   <script>

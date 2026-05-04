@@ -51,6 +51,10 @@ export function taskRunAPI(taskID, values = {}) {
   return query ? path + "?" + query : path;
 }
 
+export function taskRunCurl(taskID, values = {}) {
+  return 'curl -X POST "' + window.location.origin + taskRunAPI(taskID, values) + '"';
+}
+
 export async function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
@@ -89,7 +93,38 @@ export function flashButtonText(button, text) {
 }
 
 export function renderStatusBadge(status) {
-  return '<span class="badge status-' + escapeHTML(status) + '">' + escapeHTML(String(status || "").toLowerCase()) + "</span>";
+  const normalized = String(status || "");
+  return '<span class="badge status-' + escapeHTML(normalized) + '">' +
+    '<span class="status-dot" aria-hidden="true"></span>' +
+    escapeHTML(statusLabel(normalized)) +
+    "</span>";
+}
+
+export function statusLabel(status) {
+  const labels = {
+    QUEUED: "대기",
+    RUNNING: "실행 중",
+    SUCCESS: "성공",
+    FAILED: "실패",
+    CANCELED: "취소됨",
+    ABORTED: "중단됨",
+  };
+  return labels[String(status || "").toUpperCase()] || String(status || "-").toLowerCase();
+}
+
+export function isActiveStatus(status) {
+  return status === "QUEUED" || status === "RUNNING";
+}
+
+export function isFailedStatus(status) {
+  return status === "FAILED" || status === "CANCELED" || status === "ABORTED";
+}
+
+export function showNotice(target, message, type = "") {
+  if (!target) return;
+  target.textContent = message || "";
+  target.className = "notice" + (type ? " " + type : "");
+  target.hidden = !message;
 }
 
 export function renderTimes(run) {

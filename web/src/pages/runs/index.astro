@@ -3,30 +3,51 @@ import AppShell from "../../layouts/AppShell.astro";
 ---
 
 <AppShell title="Runs · Builda" active="runs">
-  <main class="runs-grid">
-    <section>
-      <div class="panel-head">
-        <div>
-          <h1>Run list</h1>
-          <div id="run-filter" class="meta" hidden></div>
-        </div>
-        <div class="toolbar">
-          <a id="clear-run-filter" class="button secondary" href="/runs" hidden>All runs</a>
-          <div id="run-count" class="meta">0 runs</div>
-        </div>
+  <main class="workspace runs-workspace">
+    <div id="runs-status" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="page-heading">
+      <div class="page-heading-copy">
+        <p class="eyebrow">Run history</p>
+        <h1>실행 기록과 로그를 확인하세요.</h1>
+        <p class="lead">타임라인에서 실행을 고르고, 파라미터·스크립트·소요 시간·로그를 한 화면에서 확인합니다.</p>
       </div>
-      <div id="run-picker" class="run-picker" hidden>
-        <select id="run-select" aria-label="Select run"></select>
+      <div class="toolbar">
+        <a id="clear-run-filter" class="button secondary" href="/runs" hidden>전체 실행</a>
+        <div id="run-count" class="meta">0 runs</div>
       </div>
-      <div id="runs" class="run-list"></div>
     </section>
 
-    <section class="inspector">
-      <div id="summary" class="summary">
-        <div class="empty">Select a run.</div>
-      </div>
-      <pre id="log">Select a run to load its log.</pre>
-    </section>
+    <div class="runs-layout">
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title">
+            <h2>타임라인</h2>
+            <div id="run-filter" class="meta" hidden></div>
+          </div>
+          <div id="status-filters" class="status-filters" aria-label="Status filters"></div>
+        </div>
+        <div id="run-picker" class="run-picker" hidden>
+          <select id="run-select" aria-label="Select run"></select>
+        </div>
+        <div id="runs" class="run-list"></div>
+      </section>
+
+      <section class="inspector">
+        <div id="summary" class="summary">
+          <div class="empty">실행을 선택하세요.</div>
+        </div>
+        <div class="log-panel">
+          <div class="log-toolbar">
+            <h2>로그</h2>
+            <div class="toolbar">
+              <button id="copy-log" class="secondary compact" type="button">로그 복사</button>
+              <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow</button>
+            </div>
+          </div>
+          <pre id="log" tabindex="0">실행을 선택하면 로그가 표시됩니다.</pre>
+        </div>
+      </section>
+    </div>
   </main>
 
   <script>

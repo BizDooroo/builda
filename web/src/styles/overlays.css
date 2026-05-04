@@ -1,0 +1,71 @@
+.modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(31, 35, 40, 0.42);
+}
+
+.modal-shell[hidden],
+[hidden] {
+  display: none !important;
+}
+
+.modal {
+  width: min(520px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  gap: 16px;
+  padding: 18px;
+  border-radius: var(--radius);
+  background: var(--canvas);
+  box-shadow: var(--shadow-popover);
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.modal-title,
+.modal-title h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.modal-fields,
+.field {
+  gap: 12px;
+}
+
+.field {
+  gap: 6px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.notice {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: var(--shadow-border);
+  font-size: 13px;
+}
+
+.notice.error {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.notice.ok {
+  background: var(--success-subtle);
+  color: var(--success);
+}

@@ -19,20 +19,27 @@ const {
     <title>{title}</title>
   </head>
   <body data-header-mode={headerMode}>
-    <header>
-      {
-        backHref ? (
-          <a class="button secondary" href={backHref}>{backLabel}</a>
-        ) : (
-          <a class="brand" href="/" aria-label="Builda home">Builda</a>
-        )
-      }
-      <nav class="toolbar" aria-label="Primary">
+    <header class="topbar">
+      <div class="topbar-main">
+        {
+          backHref ? (
+            <a class="button secondary compact" href={backHref}>{backLabel}</a>
+          ) : (
+            <a class="brand" href="/" aria-label="Builda home">
+              <span class="brand-mark" aria-hidden="true">B</span>
+              <span>Builda</span>
+            </a>
+          )
+        }
+        <nav class="primary-nav" aria-label="Primary">
+          <a class:list={["nav-link", active === "tasks" && "active"]} href="/">작업</a>
+          <a class:list={["nav-link", active === "runs" && "active"]} href="/runs">실행 기록</a>
+        </nav>
+      </div>
+      <div class="shell-context">
         <div class="server-meta" data-server-meta>Loading server...</div>
-        <a class:list={["button", "secondary", active === "tasks" && "active"]} href="/">Tasks</a>
-        <a class:list={["button", "secondary", active === "runs" && "active"]} href="/runs">Runs</a>
-        <a class="button secondary" href="/config" data-config-link hidden>Config</a>
-      </nav>
+        <a class="button secondary compact" href="/config" data-config-link hidden>설정</a>
+      </div>
     </header>
     <slot />
   </body>

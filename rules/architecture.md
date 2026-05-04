@@ -15,6 +15,7 @@
 - Keep log reads confined to the configured log directory and derive log filenames from run IDs.
 - Task API copy controls must work outside Clipboard API secure-context support by keeping a textarea/`execCommand("copy")` fallback.
 - The Web UI source lives under `web/` as an Astro static frontend. Go embeds only `web/dist/`; keep the built dist committed so `go install github.com/BizDooroo/builda@latest` does not require Node or pnpm.
+- Keep the Web UI as an operational workspace: the home page should surface queue health and each task's latest run, the runs page should keep status filters plus log copy/follow controls, and direct `/runs/{id}` detail pages should stay aligned with the main runs inspector.
 - Keep daemon installation user-scoped. Linux installs should target systemd user units, and macOS installs should target launchd LaunchAgents; do not require root-owned system service files unless explicitly requested.
 - Config write paths, including CLI commands and HTTP handlers, must parse and validate YAML before replacing the current config file.
 - A running server should reload the active config file after it changes so `builda config set` updates configured tasks without a daemon restart.
