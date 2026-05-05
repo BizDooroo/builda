@@ -217,6 +217,23 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.build-id {
+  min-height: 30px;
+  max-width: min(58ch, 48vw);
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  color: var(--muted);
+  box-shadow: var(--shadow-border);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .icon-toggle,
 .locale-toggle {
   width: 34px;
@@ -298,6 +315,7 @@ textarea:focus-visible {
 
 .meta,
 .count,
+.build-id,
 .times,
 .kv,
 pre,

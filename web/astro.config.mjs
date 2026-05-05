@@ -20,6 +20,7 @@ function deterministicClientBuildNames() {
             output: {
               chunkFileNames: "_astro/[name].js",
               entryFileNames: entryFileName,
+              minifyInternalExports: false,
             },
           },
         },

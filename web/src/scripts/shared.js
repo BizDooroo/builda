@@ -444,6 +444,17 @@ export function renderShellMeta(meta) {
   document.querySelectorAll("[data-config-path]").forEach((node) => {
     node.textContent = meta.config_path || "";
   });
+
+  const version = String(meta.version || "").trim() || "dev";
+  let commit = String(meta.commit || "").trim() || "unknown";
+  if (commit !== "unknown" && meta.build_modified) commit += " dirty";
+  const buildID = "Builda " + version + " @ " + commit;
+  document.querySelectorAll("[data-build-id]").forEach((node) => {
+    node.textContent = buildID;
+    node.title = meta.version_info || buildID;
+    node.setAttribute("aria-label", buildID);
+    node.hidden = false;
+  });
 }
 
 export function taskInputs(task) {

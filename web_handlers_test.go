@@ -34,6 +34,7 @@ func TestRunsPageRendersWorkspace(t *testing.T) {
 	assertEmbeddedWebContains(t, "time.duration")
 	assertEmbeddedWebContains(t, "data-theme-toggle")
 	assertEmbeddedWebContains(t, "data-locale-toggle")
+	assertEmbeddedWebContains(t, "data-build-id")
 	assertEmbeddedWebContains(t, "delete-run")
 }
 
