@@ -200,9 +200,11 @@ Input IDs become environment variables for the script as `BUILDA_INPUT_{ID}` wit
 
 The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the script, configured inputs, and API address. If a task has inputs, pressing Run opens a popup for string fields and choice selectors before appending the run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
 
-Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, parameters, finish, and cancellation times.
+Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, parameters, finish, and cancellation times. Completed run history entries can be deleted from the detail pane, which also removes the derived log file.
 
 Open `/runs?task=hello` to show only runs for one task in the run list workspace.
+
+The top-right controls switch color scheme (`dark`, `light`, or `system`) and locale (`en` or `ko`) locally in the browser.
 
 When `server.config_password` is set, the config editor is available at `/config` and requires that password before loading or saving YAML. When the password is omitted, the home page does not show the config button and the HTTP config editor is disabled.
 
@@ -239,6 +241,7 @@ Other useful endpoints:
 - `GET /api/meta`: server metadata for the static Web UI, including hostname, log directory, start time, config path, and whether config editing is enabled.
 - `GET /api/state`: current tasks and run summaries. Add `?task={taskID}` to return only runs for one task.
 - `GET /api/runs/{runID}`: one run summary.
+- `DELETE /api/runs/{runID}`: delete a completed run history entry and its log file. Queued and running runs return `409 Conflict`.
 - `POST /api/runs/{runID}/cancel`: cancel a queued or running task.
 - `GET /api/runs/{runID}/log`: run log text.
 - `GET /api/config`: current YAML config, only when the Web UI config password is provided.

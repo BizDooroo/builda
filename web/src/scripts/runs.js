@@ -12,8 +12,10 @@ import {
   renderRunParams,
   renderStatusBadge,
   renderTimes,
+  runLogDisplayText,
   showNotice,
   statusLabel,
+  t,
 } from "./shared.js";
 
 const runsStatusEl = document.querySelector("#runs-status");
@@ -27,6 +29,7 @@ const runSelectEl = document.querySelector("#run-select");
 const summaryEl = document.querySelector("#summary");
 const logEl = document.querySelector("#log");
 const copyLogEl = document.querySelector("#copy-log");
+const deleteRunEl = document.querySelector("#delete-run");
 const followLogEl = document.querySelector("#follow-log");
 const params = new URLSearchParams(window.location.search);
 const taskFilter = params.get("task") || "";
@@ -62,15 +65,15 @@ document.addEventListener("click", async (event) => {
   const cancel = event.target.closest("[data-cancel]");
   if (cancel) {
     event.preventDefault();
-    if (!confirm("이 실행을 취소할까요? 이미 시작된 스크립트가 중단될 수 있습니다.")) return;
+    if (!confirm(t("confirm.cancelRun"))) return;
     cancel.disabled = true;
     try {
       const response = await fetch("/api/runs/" + encodeURIComponent(cancel.dataset.cancel) + "/cancel", { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
-      showNotice(runsStatusEl, "취소 요청을 보냈습니다.", "ok");
+      showNotice(runsStatusEl, t("notice.runCancelRequested"), "ok");
       await refresh();
     } catch (error) {
-      showNotice(runsStatusEl, "취소에 실패했습니다: " + error.message, "error");
+      showNotice(runsStatusEl, t("notice.runCancelFailed", { error: error.message }), "error");
     } finally {
       cancel.disabled = false;
     }
@@ -81,13 +84,34 @@ copyLogEl.addEventListener("click", async () => {
   copyLogEl.disabled = true;
   try {
     await copyText(currentLogText);
-    flashButtonText(copyLogEl, "복사됨");
-    showNotice(runsStatusEl, "로그를 복사했습니다.", "ok");
+    flashButtonText(copyLogEl, t("common.copied"));
+    showNotice(runsStatusEl, t("notice.logCopied"), "ok");
   } catch (error) {
-    flashButtonText(copyLogEl, "실패");
-    showNotice(runsStatusEl, "로그 복사에 실패했습니다: " + error.message, "error");
+    flashButtonText(copyLogEl, t("common.failed"));
+    showNotice(runsStatusEl, t("notice.logCopyFailed", { error: error.message }), "error");
   } finally {
     copyLogEl.disabled = false;
+  }
+});
+
+deleteRunEl.addEventListener("click", async () => {
+  if (!selectedRunID || !confirm(t("confirm.deleteRun"))) return;
+  const deletedRunID = selectedRunID;
+  deleteRunEl.disabled = true;
+  try {
+    const response = await fetch("/api/runs/" + encodeURIComponent(deletedRunID), { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    latestRuns = latestRuns.filter((run) => run.id !== deletedRunID);
+    visibleRuns = filterRuns(latestRuns);
+    selectedRunID = visibleRuns.length ? visibleRuns[0].id : "";
+    updateURL(false);
+    renderRuns(latestRuns);
+    await renderSelectedRun();
+    showNotice(runsStatusEl, t("notice.deleteRunSuccess"), "ok");
+  } catch (error) {
+    showNotice(runsStatusEl, t("notice.deleteRunFailed", { error: error.message }), "error");
+  } finally {
+    renderLogActions(latestRuns.find((run) => run.id === selectedRunID));
   }
 });
 
@@ -124,6 +148,7 @@ async function refresh() {
       summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
       currentLogText = emptyRunMessage();
       logEl.textContent = currentLogText;
+      renderLogActions(null);
       return;
     }
     if (!selectedRunID || !visibleRuns.some((run) => run.id === selectedRunID)) {
@@ -133,7 +158,7 @@ async function refresh() {
     renderRuns(latestRuns);
     await renderSelectedRun();
   } catch (error) {
-    showNotice(runsStatusEl, "실행 기록을 불러오지 못했습니다: " + error.message, "error");
+    showNotice(runsStatusEl, t("notice.loadRunsFailed", { error: error.message }), "error");
   }
 }
 
@@ -141,7 +166,7 @@ function renderRuns(runs) {
   visibleRuns = filterRuns(runs);
   if (taskFilter) {
     runFilterEl.hidden = false;
-    runFilterEl.textContent = "task " + taskFilter;
+    runFilterEl.textContent = t("runs.taskFilter", { task: taskFilter });
     clearRunFilterEl.hidden = false;
   } else {
     runFilterEl.hidden = true;
@@ -149,7 +174,7 @@ function renderRuns(runs) {
     clearRunFilterEl.hidden = true;
   }
   renderStatusFilters(runs);
-  runCountEl.textContent = visibleRuns.length + (visibleRuns.length === 1 ? " run" : " runs");
+  runCountEl.textContent = t("count.runs", { count: visibleRuns.length });
   if (!visibleRuns.length) {
     runPickerEl.hidden = true;
     runsEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
@@ -158,7 +183,7 @@ function renderRuns(runs) {
   runPickerEl.hidden = false;
   runSelectEl.innerHTML = visibleRuns.map((run) => {
     return '<option value="' + escapeHTML(run.id) + '"' + (run.id === selectedRunID ? " selected" : "") + ">" +
-      escapeHTML(run.task_name + " · " + statusLabel(run.status) + " · request " + formatTime(run.requested_at) + " · elapsed " + formatElapsed(run)) +
+      escapeHTML(run.task_name + " · " + statusLabel(run.status) + " · " + t("time.request") + " " + formatTime(run.requested_at) + " · " + t("time.elapsed") + " " + formatElapsed(run)) +
       "</option>";
   }).join("");
   runsEl.innerHTML = visibleRuns.map((run) => {
@@ -183,6 +208,7 @@ async function renderSelectedRun() {
     summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
     currentLogText = emptyRunMessage();
     logEl.textContent = currentLogText;
+    renderLogActions(null);
     return;
   }
   try {
@@ -193,22 +219,24 @@ async function renderSelectedRun() {
     if (!runResponse.ok) throw new Error(await runResponse.text());
     const run = await runResponse.json();
     const canCancel = isActiveStatus(run.status);
-    const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">취소</button>' : "";
+    const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">' + escapeHTML(t("action.cancel")) + "</button>" : "";
     summaryEl.innerHTML = '<div class="summary-head"><div class="summary-title"><h1>' + escapeHTML(run.task_name) + "</h1>" +
       '<div class="meta">' + escapeHTML(run.id) + "</div>" +
       renderRunParams(run) +
       "</div>" +
       '<div class="summary-actions">' + renderStatusBadge(run.status) + cancel + "</div></div>" +
-      '<div class="kv"><span>Task <b>' + escapeHTML(run.task_id) + '</b></span><span>Exit <b>' + escapeHTML(run.exit_code) + "</b></span></div>" +
+      '<div class="kv"><span>' + escapeHTML(t("field.taskID")) + " <b>" + escapeHTML(run.task_id) + '</b></span><span>' + escapeHTML(t("field.exit")) + " <b>" + escapeHTML(run.exit_code) + "</b></span></div>" +
       renderTimes(run) +
-      '<details class="script-details"><summary>스크립트 보기</summary><code>' + escapeHTML(run.script) + "</code></details>";
+      '<details class="script-details"><summary>' + escapeHTML(t("script.view")) + "</summary><code>" + escapeHTML(run.script) + "</code></details>";
     if (!logResponse.ok) throw new Error(await logResponse.text());
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-    currentLogText = await logResponse.text();
-    logEl.innerHTML = renderLogText(currentLogText);
+    const fetchedLogText = await logResponse.text();
+    currentLogText = fetchedLogText;
+    logEl.innerHTML = renderLogText(runLogDisplayText(fetchedLogText));
+    renderLogActions(run);
     if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
-    showNotice(runsStatusEl, "선택한 실행을 불러오지 못했습니다: " + error.message, "error");
+    showNotice(runsStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
   }
 }
 
@@ -234,10 +262,10 @@ function filterRuns(runs) {
 
 function renderStatusFilters(runs) {
   const filters = [
-    ["all", "전체", runs.length],
-    ["active", "대기/실행", runs.filter((run) => isActiveStatus(run.status)).length],
-    ["failed", "실패", runs.filter((run) => isFailedStatus(run.status)).length],
-    ["success", "성공", runs.filter((run) => run.status === "SUCCESS").length],
+    ["all", t("filter.all"), runs.length],
+    ["active", t("filter.active"), runs.filter((run) => isActiveStatus(run.status)).length],
+    ["failed", t("filter.failed"), runs.filter((run) => isFailedStatus(run.status)).length],
+    ["success", t("filter.success"), runs.filter((run) => run.status === "SUCCESS").length],
   ];
   statusFiltersEl.innerHTML = filters.map(([key, label, count]) => {
     const active = key === statusFilter ? " active" : "";
@@ -248,23 +276,33 @@ function renderStatusFilters(runs) {
 }
 
 function emptyRunMessage() {
-  if (taskFilter && statusFilter === "failed") return "이 작업의 실패한 실행이 없습니다.";
-  if (taskFilter && statusFilter === "active") return "이 작업의 대기 또는 실행 중인 기록이 없습니다.";
-  if (taskFilter && statusFilter === "success") return "이 작업의 성공한 실행이 없습니다.";
-  if (taskFilter) return "이 작업의 실행 기록이 없습니다.";
-  if (statusFilter === "failed") return "실패한 실행이 없습니다.";
-  if (statusFilter === "active") return "대기 또는 실행 중인 기록이 없습니다.";
-  if (statusFilter === "success") return "성공한 실행이 없습니다.";
-  return "아직 실행 기록이 없습니다.";
+  if (taskFilter && statusFilter === "failed") return t("empty.taskFailedRuns");
+  if (taskFilter && statusFilter === "active") return t("empty.taskActiveRuns");
+  if (taskFilter && statusFilter === "success") return t("empty.taskSuccessRuns");
+  if (taskFilter) return t("empty.taskRuns");
+  if (statusFilter === "failed") return t("empty.failedRuns");
+  if (statusFilter === "active") return t("empty.activeRuns");
+  if (statusFilter === "success") return t("empty.successRuns");
+  return t("empty.noRuns");
 }
 
 function renderFollowButton() {
   followLogEl.classList.toggle("active", followLog);
   followLogEl.setAttribute("aria-pressed", String(followLog));
-  followLogEl.textContent = followLog ? "Follow on" : "Follow off";
+  followLogEl.textContent = followLog ? t("action.followOn") : t("action.followOff");
+}
+
+function renderLogActions(run) {
+  deleteRunEl.disabled = !run || isActiveStatus(run.status);
 }
 
 await initShell();
+document.addEventListener("builda:localechange", () => {
+  renderRuns(latestRuns);
+  renderFollowButton();
+  void renderSelectedRun();
+});
 renderFollowButton();
+renderLogActions(null);
 await refresh();
 setInterval(refresh, 1500);

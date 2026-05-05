@@ -17,27 +17,48 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>{title}</title>
+    <script is:inline>
+      (() => {
+        try {
+          const theme = localStorage.getItem("builda.theme") || "system";
+          const locale = localStorage.getItem("builda.locale") || "ko";
+          document.documentElement.dataset.theme = ["dark", "light", "system"].includes(theme) ? theme : "system";
+          document.documentElement.lang = ["en", "ko"].includes(locale) ? locale : "ko";
+        } catch {
+          document.documentElement.dataset.theme = "system";
+        }
+      })();
+    </script>
   </head>
   <body data-header-mode={headerMode}>
     <header class="topbar">
       <div class="topbar-main">
         {
           backHref ? (
-            <a class="button secondary compact" href={backHref}>{backLabel}</a>
+            <a class="button secondary compact" href={backHref} data-i18n="nav.back">{backLabel}</a>
           ) : (
-            <a class="brand" href="/" aria-label="Builda home">
+            <a class="brand" href="/" aria-label="Builda home" data-i18n-aria-label="brand.home">
               <span class="brand-mark" aria-hidden="true">B</span>
               <span>Builda</span>
             </a>
           )
         }
-        <nav class="primary-nav" aria-label="Primary">
-          <a class:list={["nav-link", active === "tasks" && "active"]} href="/">작업</a>
-          <a class:list={["nav-link", active === "runs" && "active"]} href="/runs">실행 기록</a>
+        <nav class="primary-nav" aria-label="Primary" data-i18n-aria-label="nav.primary">
+          <a class:list={["nav-link", active === "tasks" && "active"]} href="/" data-i18n="nav.tasks">작업</a>
+          <a class:list={["nav-link", active === "runs" && "active"]} href="/runs" data-i18n="nav.runs">실행 기록</a>
         </nav>
       </div>
       <div class="shell-context">
-        <a class="button secondary compact" href="/config" data-config-link hidden>설정</a>
+        <div class="preference-controls">
+          <button class="secondary compact icon-toggle theme-toggle" type="button" data-theme-toggle aria-label="Color scheme" title="Color scheme">
+            <span class="theme-icon" data-theme-icon aria-hidden="true"></span>
+            <span class="sr-only" data-theme-label>system</span>
+          </button>
+          <button class="secondary compact locale-toggle" type="button" data-locale-toggle aria-label="Locale" title="Locale">
+            <span data-locale-en>A</span><span aria-hidden="true">/</span><span data-locale-ko>한</span>
+          </button>
+        </div>
+        <a class="button secondary compact" href="/config" data-config-link hidden data-i18n="nav.settings">설정</a>
       </div>
     </header>
     <slot />

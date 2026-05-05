@@ -407,7 +407,7 @@ code {
 }
 
 .log-prefix {
-  color: #8b949e;
+  color: var(--log-muted);
   white-space: pre;
 }
 
@@ -417,9 +417,9 @@ code {
 }
 
 .log-param-line .param-chip {
-  background: #21262d;
-  color: #f0f6fc;
-  box-shadow: inset 0 0 0 1px rgba(240, 246, 252, 0.16);
+  background: var(--log-chip-bg);
+  color: var(--log-chip-fg);
+  box-shadow: inset 0 0 0 1px var(--log-chip-border);
 }
 
 .status-dot {

@@ -8,6 +8,7 @@ import {
   renderTimes,
   showNotice,
   statusLabel,
+  t,
   taskInputs,
   taskRunAPI,
   taskRunCurl,
@@ -56,7 +57,7 @@ document.addEventListener("click", async (event) => {
       openRunModal(task, start);
     } else {
       const taskName = task ? task.Name || task.ID : start.dataset.start;
-      if (!confirm("작업 '" + taskName + "'을(를) 실행할까요?")) return;
+      if (!confirm(t("confirm.runTask", { task: taskName }))) return;
       start.disabled = true;
       try {
         await runTask(start.dataset.start, {});
@@ -78,11 +79,11 @@ document.addEventListener("click", async (event) => {
     copy.disabled = true;
     try {
       await copyText(window.location.origin + copy.dataset.copyApi);
-      flashButtonText(copy, "복사됨");
-      showNotice(homeStatusEl, "API URL을 복사했습니다.", "ok");
+      flashButtonText(copy, t("common.copied"));
+      showNotice(homeStatusEl, t("notice.apiCopied"), "ok");
     } catch (error) {
-      flashButtonText(copy, "실패");
-      showNotice(homeStatusEl, "API URL 복사에 실패했습니다: " + error.message, "error");
+      flashButtonText(copy, t("common.failed"));
+      showNotice(homeStatusEl, t("notice.apiCopyFailed", { error: error.message }), "error");
       console.error("copy failed", error);
     } finally {
       copy.disabled = false;
@@ -95,11 +96,11 @@ document.addEventListener("click", async (event) => {
     copyCurl.disabled = true;
     try {
       await copyText(copyCurl.dataset.copyCurl);
-      flashButtonText(copyCurl, "복사됨");
-      showNotice(homeStatusEl, "curl 명령을 복사했습니다.", "ok");
+      flashButtonText(copyCurl, t("common.copied"));
+      showNotice(homeStatusEl, t("notice.curlCopied"), "ok");
     } catch (error) {
-      flashButtonText(copyCurl, "실패");
-      showNotice(homeStatusEl, "curl 복사에 실패했습니다: " + error.message, "error");
+      flashButtonText(copyCurl, t("common.failed"));
+      showNotice(homeStatusEl, t("notice.curlCopyFailed", { error: error.message }), "error");
       console.error("copy failed", error);
     } finally {
       copyCurl.disabled = false;
@@ -109,15 +110,15 @@ document.addEventListener("click", async (event) => {
   const cancel = event.target.closest("[data-cancel]");
   if (cancel) {
     event.preventDefault();
-    if (!confirm("이 실행을 취소할까요? 이미 시작된 스크립트가 중단될 수 있습니다.")) return;
+    if (!confirm(t("confirm.cancelRun"))) return;
     cancel.disabled = true;
     try {
       const response = await fetch("/api/runs/" + encodeURIComponent(cancel.dataset.cancel) + "/cancel", { method: "POST" });
       if (!response.ok) throw new Error(await response.text());
-      showNotice(homeStatusEl, "취소 요청을 보냈습니다.", "ok");
+      showNotice(homeStatusEl, t("notice.runCancelRequested"), "ok");
       await refresh();
     } catch (error) {
-      showNotice(homeStatusEl, "취소에 실패했습니다: " + error.message, "error");
+      showNotice(homeStatusEl, t("notice.runCancelFailed", { error: error.message }), "error");
     } finally {
       cancel.disabled = false;
     }
@@ -175,7 +176,7 @@ async function refresh() {
     renderTasks(latestTasks, latestRuns);
     renderRuns(latestRuns);
   } catch (error) {
-    showNotice(homeStatusEl, "상태를 불러오지 못했습니다: " + error.message, "error");
+    showNotice(homeStatusEl, t("notice.configLoadFailed", { error: error.message }), "error");
   }
 }
 
@@ -184,11 +185,11 @@ async function runTask(taskID, values) {
     const response = await fetch(taskRunAPI(taskID, values), { method: "POST" });
     if (!response.ok) throw new Error(await response.text());
     const run = await response.json();
-    showNotice(homeStatusEl, "실행이 큐에 등록되었습니다. 로그 화면으로 이동합니다.", "ok");
+    showNotice(homeStatusEl, t("notice.runQueued"), "ok");
     window.location.href = "/runs?run=" + encodeURIComponent(run.id);
     return true;
   } catch (error) {
-    showNotice(homeStatusEl, "실행에 실패했습니다: " + error.message, "error");
+    showNotice(homeStatusEl, t("notice.runStartFailed", { error: error.message }), "error");
     return false;
   }
 }
@@ -204,7 +205,7 @@ function renderOverview(tasks, runs) {
 
 function renderTasks(tasks, runs) {
   if (!tasks.length) {
-    tasksEl.innerHTML = '<div class="empty">설정된 작업이 없습니다.</div>';
+    tasksEl.innerHTML = '<div class="empty">' + escapeHTML(t("empty.noTasks")) + "</div>";
     return;
   }
   const latestByTask = new Map();
@@ -214,28 +215,28 @@ function renderTasks(tasks, runs) {
   tasksEl.innerHTML = tasks.map((task) => {
     const description = task.Description || task.ID;
     const latestRun = latestByTask.get(task.ID);
-    const timeout = task.Timeout ? '<div class="detail-line"><span>Timeout</span><span>' + escapeHTML(task.Timeout) + "</span></div>" : "";
+    const timeout = task.Timeout ? '<div class="detail-line"><span>' + escapeHTML(t("field.timeout")) + "</span><span>" + escapeHTML(task.Timeout) + "</span></div>" : "";
     const api = taskRunAPI(task.ID);
     const curl = taskRunCurl(task.ID);
     const inputDetails = renderTaskInputs(task);
     const isExpanded = expandedTasks.has(task.ID);
     const details = isExpanded ? '<div class="task-details">' +
-      '<div class="task-description-full"><span>Description</span><span>' + escapeHTML(description) + "</span></div>" +
-      '<div class="detail-line"><span>Task ID</span><span>' + escapeHTML(task.ID) + "</span></div>" +
+      '<div class="task-description-full"><span>' + escapeHTML(t("field.description")) + "</span><span>" + escapeHTML(description) + "</span></div>" +
+      '<div class="detail-line"><span>' + escapeHTML(t("field.taskID")) + "</span><span>" + escapeHTML(task.ID) + "</span></div>" +
       timeout +
       inputDetails +
       "<code>" + escapeHTML(task.script) + "</code>" +
-      '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary compact" data-copy-api="' + escapeHTML(api) + '">URL 복사</button><button class="secondary compact" data-copy-curl="' + escapeHTML(curl) + '">curl 복사</button></div>' +
-      '<div class="actions"><a class="button secondary" href="/runs?task=' + encodeURIComponent(task.ID) + '">이 작업 기록</a></div>' +
+      '<div class="api-row"><span>POST ' + escapeHTML(api) + '</span><button class="secondary compact" data-copy-api="' + escapeHTML(api) + '">' + escapeHTML(t("action.copyURL")) + '</button><button class="secondary compact" data-copy-curl="' + escapeHTML(curl) + '">' + escapeHTML(t("action.copyCurl")) + "</button></div>" +
+      '<div class="actions"><a class="button secondary" href="/runs?task=' + encodeURIComponent(task.ID) + '">' + escapeHTML(t("action.taskRuns")) + "</a></div>" +
       "</div>" : "";
     const latest = latestRun ? '<div class="task-meta-row">' + renderStatusBadge(latestRun.status) +
-      '<span class="meta">마지막 실행 ' + escapeHTML(latestRun.id) + '</span></div>' : '<div class="task-meta-row"><span class="chip">실행 기록 없음</span></div>';
+      '<span class="meta">' + escapeHTML(t("home.latestRun", { id: latestRun.id })) + '</span></div>' : '<div class="task-meta-row"><span class="chip">' + escapeHTML(t("home.noRunsChip")) + "</span></div>";
     return '<article class="task">' +
       '<div class="row task-summary"><div class="task-copy"><span class="task-name">' + escapeHTML(task.Name || task.ID) + "</span>" +
       '<div class="meta task-description">' + escapeHTML(description) + "</div>" + latest + "</div>" +
-      '<div class="task-actions"><button class="secondary icon-button detail-toggle" data-toggle-task="' + escapeHTML(task.ID) + '" aria-label="' + (isExpanded ? "상세 닫기" : "상세 보기") + '" title="' + (isExpanded ? "상세 닫기" : "상세 보기") + '" aria-expanded="' + String(isExpanded) + '">' +
+      '<div class="task-actions"><button class="secondary icon-button detail-toggle" data-toggle-task="' + escapeHTML(task.ID) + '" aria-label="' + escapeHTML(isExpanded ? t("task.detailsClose") : t("task.detailsOpen")) + '" title="' + escapeHTML(isExpanded ? t("task.detailsClose") : t("task.detailsOpen")) + '" aria-expanded="' + String(isExpanded) + '">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>' +
-      '</button><button data-start="' + escapeHTML(task.ID) + '">실행</button></div></div>' +
+      '</button><button data-start="' + escapeHTML(task.ID) + '">' + escapeHTML(t("action.run")) + "</button></div></div>" +
       details +
       "</article>";
   }).join("");
@@ -246,12 +247,13 @@ function renderTaskInputs(task) {
   if (!inputs.length) return "";
   return '<div class="input-list">' + inputs.map((input) => {
     const type = input.Type === "choice" ? "choice" : "string";
-    const required = input.Required ? "required" : "optional";
-    const options = type === "choice" ? " · options " + (input.Options || []).join(", ") : "";
+    const typeLabel = t("input." + type);
+    const required = input.Required ? t("field.inputRequired") : t("field.inputOptional");
+    const options = type === "choice" ? " · " + t("field.options") + " " + (input.Options || []).join(", ") : "";
     const description = input.Description ? "<span>" + escapeHTML(input.Description) + "</span>" : "";
     return '<div class="input-item">' +
       '<div class="input-title"><span>' + escapeHTML(input.Name || input.ID) + '</span><span class="input-meta">' + escapeHTML(required) + "</span></div>" +
-      '<span class="input-meta">' + escapeHTML(input.ID + " · " + type + options + " · env " + inputEnvName(input.ID)) + "</span>" +
+      '<span class="input-meta">' + escapeHTML(input.ID + " · " + typeLabel + options + " · " + t("field.env") + " " + inputEnvName(input.ID)) + "</span>" +
       description +
       "</div>";
   }).join("") + "</div>";
@@ -261,9 +263,7 @@ function openRunModal(task, trigger) {
   pendingTask = task;
   returnFocusEl = trigger || document.activeElement;
   returnFocusTaskID = task.ID;
-  runModalTitleEl.textContent = (task.Name || task.ID) + " 실행";
-  runModalMetaEl.textContent = "작업 ID " + task.ID + " · 입력값은 실행 기록에 저장됩니다.";
-  runModalFieldsEl.innerHTML = taskInputs(task).map(renderRunInputField).join("");
+  renderRunModal(task);
   runModalEl.hidden = false;
   const first = runFormEl.querySelector("input, select");
   if (first) {
@@ -294,7 +294,7 @@ function renderRunInputField(input) {
   const description = input.Description ? '<div class="meta">' + escapeHTML(input.Description) + "</div>" : "";
   const label = '<label for="' + escapeHTML(id) + '">' + escapeHTML(input.Name || input.ID) + "</label>";
   if (input.Type === "choice") {
-    const blank = '<option value="">' + (input.Required ? "선택하세요" : "선택 안 함") + "</option>";
+    const blank = '<option value="">' + (input.Required ? t("select.choose") : t("select.noChoice")) + "</option>";
     const options = blank + (input.Options || []).map((option) => {
       const selected = option === input.Default ? " selected" : "";
       return '<option value="' + escapeHTML(option) + '"' + selected + ">" + escapeHTML(option) + "</option>";
@@ -315,23 +315,35 @@ function findStartButton(taskID) {
 
 function renderRuns(runs) {
   const latestRuns = runs.slice(0, latestRunLimit);
-  runCountEl.textContent = latestRuns.length + " latest";
+  runCountEl.textContent = t("count.latest", { count: latestRuns.length });
   if (!latestRuns.length) {
-    runsEl.innerHTML = '<div class="empty">아직 실행 기록이 없습니다.</div>';
+    runsEl.innerHTML = '<div class="empty">' + escapeHTML(t("empty.noRuns")) + "</div>";
     return;
   }
   runsEl.innerHTML = latestRuns.map((run) => {
     const canCancel = isActiveStatus(run.status);
-    const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">취소</button>' : "";
+    const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">' + escapeHTML(t("action.cancel")) + "</button>" : "";
     return '<article class="run">' +
       '<div class="row"><div class="run-title"><span class="run-name">' + escapeHTML(run.task_name) + '</span><div class="meta">' + escapeHTML(run.id) + "</div></div>" +
       renderStatusBadge(run.status) + "</div>" +
       renderTimes(run) +
-      '<div class="actions"><a class="button secondary" href="/runs?run=' + encodeURIComponent(run.id) + '">로그 확인</a>' + cancel + "</div>" +
+      '<div class="actions"><a class="button secondary" href="/runs?run=' + encodeURIComponent(run.id) + '">' + escapeHTML(t("action.openLog")) + "</a>" + cancel + "</div>" +
       "</article>";
   }).join("");
 }
 
 await initShell();
+document.addEventListener("builda:localechange", () => {
+  renderOverview(latestTasks, latestRuns);
+  renderTasks(latestTasks, latestRuns);
+  renderRuns(latestRuns);
+  if (pendingTask) renderRunModal(pendingTask);
+});
 await refresh();
 setInterval(refresh, 1500);
+
+function renderRunModal(task) {
+  runModalTitleEl.textContent = t("modal.runTitle", { task: task.Name || task.ID });
+  runModalMetaEl.textContent = t("modal.runMeta", { task: task.ID });
+  runModalFieldsEl.innerHTML = taskInputs(task).map(renderRunInputField).join("");
+}

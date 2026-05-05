@@ -146,6 +146,91 @@ func TestTaskRunAPIWaitsAndReturnsRunLog(t *testing.T) {
 	}
 }
 
+func TestRunAPIDeletesCompletedRunHistory(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "hello",
+		Name:    "Hello",
+		Script:  "echo delete-me",
+		Timeout: "5s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+	run, err := app.runner.Start(task, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, run)
+	if _, err := os.Stat(run.LogPath); err != nil {
+		t.Fatalf("expected log before delete, got %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/runs/"+run.ID, nil)
+	app.handleRunAPI(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected delete run API to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(run.LogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected log to be removed, got %v", err)
+	}
+	if found, ok := app.runner.Find(run.ID); ok {
+		t.Fatalf("expected run history to be removed, got %#v", found)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/runs/"+run.ID, nil)
+	app.handleRunAPI(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected deleted run API to return 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunAPIRejectsActiveRunDelete(t *testing.T) {
+	dir := t.TempDir()
+	task := TaskConfig{
+		ID:      "slow",
+		Name:    "Slow",
+		Script:  "sleep 10",
+		Timeout: "30s",
+	}
+	app := &App{
+		cfg:    Config{Tasks: []TaskConfig{task}},
+		tasks:  buildTaskMap([]TaskConfig{task}),
+		runner: NewRunner(dir),
+		logDir: dir,
+	}
+	run, err := app.runner.Start(task, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/runs/"+run.ID, nil)
+	app.handleRunAPI(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected active run delete to conflict, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !app.runner.Cancel(run.ID) {
+		t.Fatal("expected cancel to clean up active run")
+	}
+	waitForRun(t, run)
+}
+
+func TestRunLogAPIRejectsDeleteMethod(t *testing.T) {
+	app := &App{runner: NewRunner(t.TempDir())}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/runs/missing/log", nil)
+	app.handleRunAPI(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected run log delete API to be disabled, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTaskRunAPIRejectsInvalidWaitParam(t *testing.T) {
 	dir := t.TempDir()
 	task := TaskConfig{

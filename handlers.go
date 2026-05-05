@@ -356,6 +356,22 @@ func (a *App) handleRunAPI(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/runs/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 1 && parts[0] != "" {
+		if r.Method == http.MethodDelete {
+			if err := a.runner.Delete(parts[0]); err != nil {
+				if errors.Is(err, errRunNotFound) {
+					http.NotFound(w, r)
+					return
+				}
+				if errors.Is(err, errRunActive) {
+					http.Error(w, "cannot delete active runs", http.StatusConflict)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			respondJSON(w, map[string]any{"ok": true})
+			return
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -388,6 +404,10 @@ func (a *App) handleRunAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleLog(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	data, err := readRunLog(a.logDir, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -398,15 +418,19 @@ func (a *App) handleLog(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func readRunLog(logDir, id string) ([]byte, error) {
-	path := filepath.Join(logDir, filepath.Base(id)+".log")
+	path := runLogPath(logDir, id)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return []byte("Log file has not been created yet.\n"), nil
+			return []byte("Log file is not available.\n"), nil
 		}
 		return nil, err
 	}
 	return data, nil
+}
+
+func runLogPath(logDir, id string) string {
+	return filepath.Join(logDir, filepath.Base(id)+".log")
 }
 
 func respondJSON(w http.ResponseWriter, value any) {

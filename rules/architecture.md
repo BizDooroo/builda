@@ -14,6 +14,7 @@
 - `wait` is reserved as a task run API control query parameter. `wait=1` should block until the queued run reaches a terminal state and return the run log with the response.
 - Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
 - Keep log reads confined to the configured log directory and derive log filenames from run IDs.
+- Run history deletion should remove the persisted run entry and its derived log file, and should reject queued or running runs.
 - Task API copy controls must work outside Clipboard API secure-context support by keeping a textarea/`execCommand("copy")` fallback.
 - The Web UI source lives under `web/` as an Astro static frontend. Go embeds only `web/dist/`; keep the built dist committed so `go install github.com/BizDooroo/builda@latest` does not require Node or pnpm.
 - Keep the Web UI as an operational workspace: the home page should surface queue health and each task's latest run, the runs page should keep status filters plus log copy/follow controls, and direct `/runs/{id}` detail pages should stay aligned with the main runs inspector.

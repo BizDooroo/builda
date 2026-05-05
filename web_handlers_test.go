@@ -31,7 +31,10 @@ func TestRunsPageRendersWorkspace(t *testing.T) {
 	assertEmbeddedWebContains(t, "/api/state?task=")
 	assertEmbeddedWebContains(t, "param-chip")
 	assertEmbeddedWebContains(t, "log-param-line")
-	assertEmbeddedWebContains(t, "duration ")
+	assertEmbeddedWebContains(t, "time.duration")
+	assertEmbeddedWebContains(t, "data-theme-toggle")
+	assertEmbeddedWebContains(t, "data-locale-toggle")
+	assertEmbeddedWebContains(t, "delete-run")
 }
 
 func TestRunPageRendersParamsHeaderHook(t *testing.T) {

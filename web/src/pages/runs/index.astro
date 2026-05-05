@@ -7,12 +7,12 @@ import AppShell from "../../layouts/AppShell.astro";
     <div id="runs-status" class="notice" role="status" aria-live="polite" hidden></div>
     <section class="page-heading">
       <div class="page-heading-copy">
-        <p class="eyebrow">Run history</p>
-        <h1>실행 기록과 로그를 확인하세요.</h1>
-        <p class="lead">타임라인에서 실행을 고르고, 파라미터·스크립트·소요 시간·로그를 한 화면에서 확인합니다.</p>
+        <p class="eyebrow" data-i18n="runs.eyebrow">실행 기록</p>
+        <h1 data-i18n="runs.title">실행 기록과 로그를 확인하세요.</h1>
+        <p class="lead" data-i18n="runs.lead">타임라인에서 실행을 고르고, 파라미터·스크립트·소요 시간·로그를 한 화면에서 확인합니다.</p>
       </div>
       <div class="toolbar">
-        <a id="clear-run-filter" class="button secondary" href="/runs" hidden>전체 실행</a>
+        <a id="clear-run-filter" class="button secondary" href="/runs" hidden data-i18n="action.viewAllRuns">전체 실행 기록</a>
         <div id="run-count" class="meta">0 runs</div>
       </div>
     </section>
@@ -21,30 +21,31 @@ import AppShell from "../../layouts/AppShell.astro";
       <section class="panel">
         <div class="panel-head">
           <div class="panel-title">
-            <h2>타임라인</h2>
+            <h2 data-i18n="runs.timeline">타임라인</h2>
             <div id="run-filter" class="meta" hidden></div>
           </div>
-          <div id="status-filters" class="status-filters" aria-label="Status filters"></div>
+          <div id="status-filters" class="status-filters" aria-label="Status filters" data-i18n-aria-label="runs.statusFilterAria"></div>
         </div>
         <div id="run-picker" class="run-picker" hidden>
-          <select id="run-select" aria-label="Select run"></select>
+          <select id="run-select" aria-label="Select run" data-i18n-aria-label="runs.selectAria"></select>
         </div>
         <div id="runs" class="run-list"></div>
       </section>
 
       <section class="inspector">
         <div id="summary" class="summary">
-          <div class="empty">실행을 선택하세요.</div>
+          <div class="empty" data-i18n="common.notSelected">실행을 선택하세요.</div>
         </div>
         <div class="log-panel">
           <div class="log-toolbar">
-            <h2>로그</h2>
+            <h2 data-i18n="log.heading">로그</h2>
             <div class="toolbar">
-              <button id="copy-log" class="secondary compact" type="button">로그 복사</button>
+              <button id="copy-log" class="secondary compact" type="button" data-i18n="action.copyLog">로그 복사</button>
+              <button id="delete-run" class="danger compact" type="button" data-i18n="action.deleteRun">실행 기록 삭제</button>
               <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow</button>
             </div>
           </div>
-          <pre id="log" tabindex="0">실행을 선택하면 로그가 표시됩니다.</pre>
+          <pre id="log" tabindex="0" data-i18n="log.empty">실행을 선택하면 로그가 표시됩니다.</pre>
         </div>
       </section>
     </div>

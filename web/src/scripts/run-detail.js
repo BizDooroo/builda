@@ -7,8 +7,10 @@ import {
   isActiveStatus,
   renderLogText,
   renderRunParamChips,
+  runLogDisplayText,
   showNotice,
   statusLabel,
+  t,
 } from "./shared.js";
 
 const runID = decodeURIComponent(window.location.pathname.replace(/^\/runs\//, "").replace(/\/$/, ""));
@@ -20,6 +22,7 @@ const logEl = document.querySelector("#log");
 const badgeEl = document.querySelector("#badge");
 const cancelRunEl = document.querySelector("#cancel-run");
 const copyLogEl = document.querySelector("#copy-log");
+const deleteRunEl = document.querySelector("#delete-run");
 const followLogEl = document.querySelector("#follow-log");
 const requestedEl = document.querySelector("#requested");
 const startedEl = document.querySelector("#started");
@@ -29,17 +32,18 @@ const paramsEl = document.querySelector("#params");
 let timer = 0;
 let followLog = true;
 let currentLogText = logEl.textContent;
+let latestRun = null;
 
 cancelRunEl.addEventListener("click", async () => {
-  if (!confirm("이 실행을 취소할까요? 이미 시작된 스크립트가 중단될 수 있습니다.")) return;
+  if (!confirm(t("confirm.cancelRun"))) return;
   cancelRunEl.disabled = true;
   try {
     const response = await fetch("/api/runs/" + encodeURIComponent(runID) + "/cancel", { method: "POST" });
     if (!response.ok) throw new Error(await response.text());
-    showNotice(runStatusEl, "취소 요청을 보냈습니다.", "ok");
+    showNotice(runStatusEl, t("notice.runCancelRequested"), "ok");
     await refresh();
   } catch (error) {
-    showNotice(runStatusEl, "취소에 실패했습니다: " + error.message, "error");
+    showNotice(runStatusEl, t("notice.runCancelFailed", { error: error.message }), "error");
   } finally {
     cancelRunEl.disabled = false;
   }
@@ -49,13 +53,29 @@ copyLogEl.addEventListener("click", async () => {
   copyLogEl.disabled = true;
   try {
     await copyText(currentLogText);
-    flashButtonText(copyLogEl, "복사됨");
-    showNotice(runStatusEl, "로그를 복사했습니다.", "ok");
+    flashButtonText(copyLogEl, t("common.copied"));
+    showNotice(runStatusEl, t("notice.logCopied"), "ok");
   } catch (error) {
-    flashButtonText(copyLogEl, "실패");
-    showNotice(runStatusEl, "로그 복사에 실패했습니다: " + error.message, "error");
+    flashButtonText(copyLogEl, t("common.failed"));
+    showNotice(runStatusEl, t("notice.logCopyFailed", { error: error.message }), "error");
   } finally {
     copyLogEl.disabled = false;
+  }
+});
+
+deleteRunEl.addEventListener("click", async () => {
+  if (!confirm(t("confirm.deleteRun"))) return;
+  deleteRunEl.disabled = true;
+  try {
+    const response = await fetch("/api/runs/" + encodeURIComponent(runID), { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    if (timer) clearInterval(timer);
+    showNotice(runStatusEl, t("notice.deleteRunSuccess"), "ok");
+    window.location.href = "/runs";
+  } catch (error) {
+    showNotice(runStatusEl, t("notice.deleteRunFailed", { error: error.message }), "error");
+  } finally {
+    renderLogActions(latestRun);
   }
 });
 
@@ -81,46 +101,62 @@ async function refresh() {
     ]);
     if (!runResponse.ok) throw new Error(await runResponse.text());
     const run = await runResponse.json();
-    document.title = run.task_name + " · Builda";
-    titleEl.textContent = run.task_name;
-    runIDEl.textContent = run.id;
-    scriptEl.textContent = run.script;
-    badgeEl.textContent = statusLabel(run.status);
-    badgeEl.className = "badge status-" + escapeHTML(run.status);
-    cancelRunEl.hidden = !isActiveStatus(run.status);
-    requestedEl.textContent = "request " + formatTime(run.requested_at);
-    startedEl.textContent = "start " + formatTime(run.started_at);
-    finishedEl.textContent = "finished " + formatTime(run.finished_at);
-    canceledEl.textContent = "cancelled " + formatTime(run.canceled_at);
-    const paramChips = renderRunParamChips(run.inputs);
-    if (paramChips) {
-      paramsEl.hidden = false;
-      paramsEl.innerHTML = paramChips;
-    } else {
-      paramsEl.hidden = true;
-      paramsEl.innerHTML = "";
-    }
+    latestRun = run;
+    renderRun(run);
     if (run.status !== "QUEUED" && run.status !== "RUNNING" && timer) {
       clearInterval(timer);
       timer = 0;
     }
     if (!logResponse.ok) throw new Error(await logResponse.text());
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-    currentLogText = await logResponse.text();
-    logEl.innerHTML = renderLogText(currentLogText);
+    const fetchedLogText = await logResponse.text();
+    currentLogText = fetchedLogText;
+    logEl.innerHTML = renderLogText(runLogDisplayText(fetchedLogText));
     if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
-    showNotice(runStatusEl, "실행 정보를 불러오지 못했습니다: " + error.message, "error");
+    showNotice(runStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
   }
+}
+
+function renderRun(run) {
+  document.title = run.task_name + " · Builda";
+  titleEl.textContent = run.task_name;
+  runIDEl.textContent = run.id;
+  scriptEl.textContent = run.script;
+  badgeEl.textContent = statusLabel(run.status);
+  badgeEl.className = "badge status-" + escapeHTML(run.status);
+  cancelRunEl.hidden = !isActiveStatus(run.status);
+  requestedEl.textContent = t("time.request") + " " + formatTime(run.requested_at);
+  startedEl.textContent = t("time.start") + " " + formatTime(run.started_at);
+  finishedEl.textContent = t("time.finished") + " " + formatTime(run.finished_at);
+  canceledEl.textContent = t("time.cancelled") + " " + formatTime(run.canceled_at);
+  const paramChips = renderRunParamChips(run.inputs);
+  if (paramChips) {
+    paramsEl.hidden = false;
+    paramsEl.innerHTML = paramChips;
+  } else {
+    paramsEl.hidden = true;
+    paramsEl.innerHTML = "";
+  }
+  renderLogActions(run);
+}
+
+function renderLogActions(run) {
+  deleteRunEl.disabled = !run || isActiveStatus(run.status);
 }
 
 function renderFollowButton() {
   followLogEl.classList.toggle("active", followLog);
   followLogEl.setAttribute("aria-pressed", String(followLog));
-  followLogEl.textContent = followLog ? "Follow on" : "Follow off";
+  followLogEl.textContent = followLog ? t("action.followOn") : t("action.followOff");
 }
 
 await initShell();
+document.addEventListener("builda:localechange", () => {
+  if (latestRun) renderRun(latestRun);
+  renderFollowButton();
+});
 renderFollowButton();
+renderLogActions(null);
 await refresh();
 timer = setInterval(refresh, 1000);

@@ -18,6 +18,11 @@ import (
 	"time"
 )
 
+var (
+	errRunActive   = errors.New("cannot delete active run")
+	errRunNotFound = errors.New("run not found")
+)
+
 func cloneInputs(inputs map[string]string) map[string]string {
 	if len(inputs) == 0 {
 		return nil
@@ -250,6 +255,31 @@ func (r *Runner) removePrunedLogs(pruned []*Run) {
 			log.Printf("remove pruned run log %s: %v", path, err)
 		}
 	}
+}
+
+func (r *Runner) Delete(id string) error {
+	var deleted *Run
+	r.mu.Lock()
+	for index, run := range r.runs {
+		if run == nil || run.ID != id {
+			continue
+		}
+		if !isTerminal(run.Status) {
+			r.mu.Unlock()
+			return errRunActive
+		}
+		deleted = run
+		copy(r.runs[index:], r.runs[index+1:])
+		r.runs[len(r.runs)-1] = nil
+		r.runs = r.runs[:len(r.runs)-1]
+		delete(r.byID, id)
+		r.saveLocked()
+		r.mu.Unlock()
+		r.removePrunedLogs([]*Run{deleted})
+		return nil
+	}
+	r.mu.Unlock()
+	return errRunNotFound
 }
 
 func (r *Runner) dispatchLocked() {
