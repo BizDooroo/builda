@@ -63,11 +63,11 @@ func (s fileStamp) equal(other fileStamp) bool {
 	return s.size == other.size && s.modTime.Equal(other.modTime)
 }
 
-func versionInfo() string {
+func currentVersionDetails() versionDetails {
 	v := strings.TrimSpace(version)
 	rev := strings.TrimSpace(commit)
 	built := strings.TrimSpace(date)
-	modified := ""
+	modified := false
 
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if (v == "" || v == "dev") && info.Main.Version != "" && info.Main.Version != "(devel)" {
@@ -85,7 +85,7 @@ func versionInfo() string {
 				}
 			case "vcs.modified":
 				if setting.Value == "true" {
-					modified = " dirty"
+					modified = true
 				}
 			}
 		}
@@ -94,17 +94,29 @@ func versionInfo() string {
 	if v == "" {
 		v = "dev"
 	}
-	parts := []string{"builda " + v}
-	if rev != "" {
-		if len(rev) > 12 {
-			rev = rev[:12]
-		}
-		parts = append(parts, "commit "+rev+modified)
+
+	return versionDetails{
+		Version:   v,
+		Commit:    rev,
+		BuildDate: built,
+		Modified:  modified,
 	}
+}
+
+func versionInfo() string {
+	details := currentVersionDetails()
+	commitText := details.Commit
+	if commitText == "" {
+		commitText = "unknown"
+	} else if details.Modified {
+		commitText += " dirty"
+	}
+
+	built := details.BuildDate
 	if built != "" {
-		parts = append(parts, "built "+built)
+		return strings.Join([]string{"builda " + details.Version, "commit " + commitText, "built " + built}, ", ")
 	}
-	return strings.Join(parts, ", ")
+	return strings.Join([]string{"builda " + details.Version, "commit " + commitText, "built unknown"}, ", ")
 }
 
 func configuredListenAddresses(server ServerConfig) []string {

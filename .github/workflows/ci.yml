@@ -37,7 +37,9 @@ jobs:
         run: pnpm --dir web install --frozen-lockfile
 
       - name: Check frontend build
-        run: pnpm --dir web exec astro build --outDir /tmp/builda-web-dist
+        run: |
+          pnpm --dir web build
+          git diff --exit-code -- web/dist
 
       - name: Check formatting
         run: |

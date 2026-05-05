@@ -361,7 +361,7 @@ func TestVersionInfoIncludesInjectedVersion(t *testing.T) {
 	date = "2026-05-02T00:00:00Z"
 
 	got := versionInfo()
-	for _, want := range []string{"builda v1.2.3", "commit 1234567890ab", "built 2026-05-02T00:00:00Z"} {
+	for _, want := range []string{"builda v1.2.3", "commit 1234567890abcdef", "built 2026-05-02T00:00:00Z"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("versionInfo() = %q, want %q", got, want)
 		}

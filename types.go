@@ -121,6 +121,13 @@ type fileStamp struct {
 	size    int64
 }
 
+type versionDetails struct {
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	BuildDate string `json:"build_date"`
+	Modified  bool   `json:"modified"`
+}
+
 type addressFlags []string
 
 func (a *addressFlags) String() string {

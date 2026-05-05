@@ -196,6 +196,43 @@ func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 	}
 }
 
+func TestMetaIncludesBuildVersionDetails(t *testing.T) {
+	oldVersion, oldCommit, oldDate := version, commit, date
+	t.Cleanup(func() {
+		version, commit, date = oldVersion, oldCommit, oldDate
+	})
+	version = "v9.8.7"
+	commit = "abcdef1234567890"
+	date = "2026-05-05T00:00:00Z"
+
+	app := &App{
+		cfg:      Config{},
+		hostname: "test-host",
+		started:  time.Unix(0, 0),
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/meta", nil)
+	app.handleMeta(rec, req)
+
+	var meta struct {
+		Version     string `json:"version"`
+		Commit      string `json:"commit"`
+		BuildDate   string `json:"build_date"`
+		VersionInfo string `json:"version_info"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"v9.8.7", "abcdef1234567890", "2026-05-05T00:00:00Z"} {
+		if !strings.Contains(meta.VersionInfo, want) {
+			t.Fatalf("expected version_info to contain %q, got %#v", want, meta)
+		}
+	}
+	if meta.Version != "v9.8.7" || meta.Commit != "abcdef1234567890" || meta.BuildDate != "2026-05-05T00:00:00Z" {
+		t.Fatalf("unexpected build metadata: %#v", meta)
+	}
+}
+
 func TestAppReloadConfigFromDiskUpdatesTaskMap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

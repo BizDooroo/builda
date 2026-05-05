@@ -51,6 +51,16 @@ func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
+	build := currentVersionDetails()
+	commit := build.Commit
+	if commit == "" {
+		commit = "unknown"
+	}
+	buildDate := build.BuildDate
+	if buildDate == "" {
+		buildDate = "unknown"
+	}
+
 	a.mu.RLock()
 	payload := map[string]any{
 		"hostname":               a.hostname,
@@ -58,6 +68,11 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 		"started":                a.started.Format(displayTimeLayout),
 		"config_path":            a.configPath,
 		"config_editing_enabled": configEditingEnabled(a.cfg),
+		"version":                build.Version,
+		"commit":                 commit,
+		"build_date":             buildDate,
+		"build_modified":         build.Modified,
+		"version_info":           versionInfo(),
 	}
 	a.mu.RUnlock()
 	respondJSON(w, payload)

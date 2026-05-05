@@ -59,6 +59,11 @@ Print the installed version:
 builda version
 ```
 
+The version output includes the version, commit hash, and build date when that
+metadata is available. Go module installs may report `commit unknown` and
+`built unknown`; GitHub Release binaries include those fields through the
+release build.
+
 Create a starter config:
 
 ```bash
@@ -140,6 +145,15 @@ builda service uninstall
 ```
 
 Use `--binary /path/to/builda` when installing from a temporary working directory and you want the daemon to keep using a stable binary path. Use `--start=false` to write and enable the service without starting it immediately.
+
+The service file stores the exact binary path in `ExecStart` or
+`ProgramArguments`. After installing a newer Builda binary, reinstall or
+overwrite the service from the intended binary path and restart it:
+
+```bash
+builda service install --force --binary "$(command -v builda)"
+builda service restart
+```
 
 Do not install a daemon that binds to `:PORT` or `0.0.0.0:PORT` unless the machine and network are trusted and protected. Builda is internal-only software and is not hardened for untrusted access.
 
@@ -238,7 +252,7 @@ curl -X POST -d task_id=hello http://localhost:28088/api/tasks/start
 
 Other useful endpoints:
 
-- `GET /api/meta`: server metadata for the static Web UI, including hostname, log directory, start time, config path, and whether config editing is enabled.
+- `GET /api/meta`: server metadata for the static Web UI, including hostname, log directory, start time, config path, version, commit, build date, and whether config editing is enabled.
 - `GET /api/state`: current tasks and run summaries. Add `?task={taskID}` to return only runs for one task.
 - `GET /api/runs/{runID}`: one run summary.
 - `DELETE /api/runs/{runID}`: delete a completed run history entry and its log file. Queued and running runs return `409 Conflict`.
