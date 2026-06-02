@@ -32,6 +32,7 @@ const paramsEl = document.querySelector("#params");
 let timer = 0;
 let followLog = true;
 let currentLogText = logEl.textContent;
+let renderedLogText = logEl.textContent;
 let latestRun = null;
 
 cancelRunEl.addEventListener("click", async () => {
@@ -111,8 +112,12 @@ async function refresh() {
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
     const fetchedLogText = await logResponse.text();
     currentLogText = fetchedLogText;
-    logEl.innerHTML = renderLogText(runLogDisplayText(fetchedLogText));
-    if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
+    const nextLogText = runLogDisplayText(fetchedLogText);
+    if (nextLogText !== renderedLogText) {
+      renderedLogText = nextLogText;
+      logEl.innerHTML = renderLogText(nextLogText);
+      if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
+    }
   } catch (error) {
     showNotice(runStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
   }

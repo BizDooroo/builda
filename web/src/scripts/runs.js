@@ -48,6 +48,8 @@ let latestRuns = [];
 let visibleRuns = [];
 let followLog = true;
 let currentLogText = logEl.textContent;
+let renderedLogText = logEl.textContent;
+let renderedLogRunID = "";
 let pendingTask = null;
 let returnFocusEl = null;
 let returnFocusTaskID = "";
@@ -228,6 +230,8 @@ async function refresh() {
       renderRuns(latestRuns);
       summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
       currentLogText = emptyRunMessage();
+      renderedLogText = currentLogText;
+      renderedLogRunID = "";
       logEl.textContent = currentLogText;
       renderLogActions(null);
       return;
@@ -288,6 +292,8 @@ async function renderSelectedRun() {
   if (!selectedRunID) {
     summaryEl.innerHTML = '<div class="empty">' + emptyRunMessage() + "</div>";
     currentLogText = emptyRunMessage();
+    renderedLogText = currentLogText;
+    renderedLogRunID = "";
     logEl.textContent = currentLogText;
     renderLogActions(null);
     return;
@@ -315,9 +321,15 @@ async function renderSelectedRun() {
     const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
     const fetchedLogText = await logResponse.text();
     currentLogText = fetchedLogText;
-    logEl.innerHTML = renderLogText(runLogDisplayText(fetchedLogText));
+    const nextLogText = runLogDisplayText(fetchedLogText);
+    const logChanged = selectedRunID !== renderedLogRunID || nextLogText !== renderedLogText;
+    if (logChanged) {
+      renderedLogRunID = selectedRunID;
+      renderedLogText = nextLogText;
+      logEl.innerHTML = renderLogText(nextLogText);
+    }
     renderLogActions(run);
-    if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
+    if (shouldFollow && logChanged) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
     showNotice(runsStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
   }
