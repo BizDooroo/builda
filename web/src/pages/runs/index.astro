@@ -51,6 +51,28 @@ import AppShell from "../../layouts/AppShell.astro";
     </div>
   </main>
 
+  <div id="run-modal" class="modal-shell" hidden>
+    <form id="run-form" class="modal" role="dialog" aria-modal="true" aria-labelledby="run-modal-title" tabindex="-1">
+      <div class="modal-head">
+        <div class="modal-title">
+          <h2 id="run-modal-title" data-i18n="action.run">작업 실행</h2>
+          <div id="run-modal-meta" class="meta"></div>
+        </div>
+        <button class="secondary icon-button" type="button" data-close-run-modal aria-label="닫기" title="닫기" data-i18n-aria-label="action.close" data-i18n-title="action.close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 6 6 18"></path>
+            <path d="m6 6 12 12"></path>
+          </svg>
+        </button>
+      </div>
+      <div id="run-modal-fields" class="modal-fields"></div>
+      <div class="task-actions">
+        <button class="secondary" type="button" data-close-run-modal data-i18n="action.cancel">취소</button>
+        <button id="run-modal-submit" type="submit" data-i18n="action.run">실행</button>
+      </div>
+    </form>
+  </div>
+
   <script>
     import "../../scripts/runs.js";
   </script>

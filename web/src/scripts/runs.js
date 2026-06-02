@@ -16,6 +16,8 @@ import {
   showNotice,
   statusLabel,
   t,
+  taskInputs,
+  taskRunAPI,
 } from "./shared.js";
 
 const runsStatusEl = document.querySelector("#runs-status");
@@ -31,14 +33,24 @@ const logEl = document.querySelector("#log");
 const copyLogEl = document.querySelector("#copy-log");
 const deleteRunEl = document.querySelector("#delete-run");
 const followLogEl = document.querySelector("#follow-log");
+const runModalEl = document.querySelector("#run-modal");
+const runFormEl = document.querySelector("#run-form");
+const runModalTitleEl = document.querySelector("#run-modal-title");
+const runModalMetaEl = document.querySelector("#run-modal-meta");
+const runModalFieldsEl = document.querySelector("#run-modal-fields");
+const runModalSubmitEl = document.querySelector("#run-modal-submit");
 const params = new URLSearchParams(window.location.search);
 const taskFilter = params.get("task") || "";
 let statusFilter = params.get("status") || "all";
 let selectedRunID = params.get("run") || "";
+let latestTasks = [];
 let latestRuns = [];
 let visibleRuns = [];
 let followLog = true;
 let currentLogText = logEl.textContent;
+let pendingTask = null;
+let returnFocusEl = null;
+let returnFocusTaskID = "";
 
 runsEl.classList.add("responsive-picker");
 
@@ -62,6 +74,34 @@ document.addEventListener("click", async (event) => {
     selectRun(runButton.dataset.runId, true);
   }
 
+  const start = event.target.closest("[data-start]");
+  if (start) {
+    event.preventDefault();
+    const task = latestTasks.find((candidate) => candidate.ID === start.dataset.start);
+    if (!task) {
+      showNotice(runsStatusEl, t("notice.runStartFailed", { error: "unknown task" }), "error");
+      return;
+    }
+    if (taskInputs(task).length) {
+      openRunModal(task, start);
+    } else {
+      const taskName = task.Name || task.ID;
+      if (!confirm(t("confirm.runTask", { task: taskName }))) return;
+      start.disabled = true;
+      try {
+        await runTask(task.ID, {});
+      } finally {
+        start.disabled = false;
+      }
+    }
+  }
+
+  const closeModal = event.target.closest("[data-close-run-modal]");
+  if (closeModal) {
+    event.preventDefault();
+    closeRunModal();
+  }
+
   const cancel = event.target.closest("[data-cancel]");
   if (cancel) {
     event.preventDefault();
@@ -77,6 +117,46 @@ document.addEventListener("click", async (event) => {
     } finally {
       cancel.disabled = false;
     }
+  }
+});
+
+runModalEl.addEventListener("click", (event) => {
+  if (event.target === runModalEl) {
+    closeRunModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !runModalEl.hidden) {
+    closeRunModal();
+    return;
+  }
+  if (event.key !== "Tab" || runModalEl.hidden) return;
+  const focusable = Array.from(runFormEl.querySelectorAll("button, input, select, textarea, a[href]"))
+    .filter((node) => !node.disabled && node.offsetParent !== null);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
+runFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pendingTask) return;
+  const values = Object.fromEntries(new FormData(runFormEl).entries());
+  runModalSubmitEl.disabled = true;
+  try {
+    if (await runTask(pendingTask.ID, values)) {
+      closeRunModal();
+    }
+  } finally {
+    runModalSubmitEl.disabled = false;
   }
 });
 
@@ -141,6 +221,7 @@ async function refresh() {
     const response = await fetch(stateURL);
     if (!response.ok) throw new Error(await response.text());
     const state = await response.json();
+    latestTasks = state.tasks || [];
     latestRuns = state.runs || [];
     visibleRuns = filterRuns(latestRuns);
     if (!visibleRuns.length) {
@@ -218,13 +299,15 @@ async function renderSelectedRun() {
     ]);
     if (!runResponse.ok) throw new Error(await runResponse.text());
     const run = await runResponse.json();
+    const task = latestTasks.find((candidate) => candidate.ID === run.task_id);
     const canCancel = isActiveStatus(run.status);
     const cancel = canCancel ? '<button class="danger" data-cancel="' + escapeHTML(run.id) + '">' + escapeHTML(t("action.cancel")) + "</button>" : "";
+    const rerun = task ? '<button data-start="' + escapeHTML(task.ID) + '">' + escapeHTML(t("action.run")) + "</button>" : "";
     summaryEl.innerHTML = '<div class="summary-head"><div class="summary-title"><h1>' + escapeHTML(run.task_name) + "</h1>" +
       '<div class="meta">' + escapeHTML(run.id) + "</div>" +
       renderRunParams(run) +
       "</div>" +
-      '<div class="summary-actions">' + renderStatusBadge(run.status) + cancel + "</div></div>" +
+      '<div class="summary-actions">' + renderStatusBadge(run.status) + rerun + cancel + "</div></div>" +
       '<div class="kv"><span>' + escapeHTML(t("field.taskID")) + " <b>" + escapeHTML(run.task_id) + '</b></span><span>' + escapeHTML(t("field.exit")) + " <b>" + escapeHTML(run.exit_code) + "</b></span></div>" +
       renderTimes(run) +
       '<details class="script-details"><summary>' + escapeHTML(t("script.view")) + "</summary><code>" + escapeHTML(run.script) + "</code></details>";
@@ -237,6 +320,23 @@ async function renderSelectedRun() {
     if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
   } catch (error) {
     showNotice(runsStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
+  }
+}
+
+async function runTask(taskID, values) {
+  try {
+    const response = await fetch(taskRunAPI(taskID, values), { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    const run = await response.json();
+    showNotice(runsStatusEl, t("notice.runQueued"), "ok");
+    statusFilter = "all";
+    selectedRunID = run.id;
+    updateURL(false);
+    await refresh();
+    return true;
+  } catch (error) {
+    showNotice(runsStatusEl, t("notice.runStartFailed", { error: error.message }), "error");
+    return false;
   }
 }
 
@@ -296,10 +396,67 @@ function renderLogActions(run) {
   deleteRunEl.disabled = !run || isActiveStatus(run.status);
 }
 
+function openRunModal(task, trigger) {
+  pendingTask = task;
+  returnFocusEl = trigger || document.activeElement;
+  returnFocusTaskID = task.ID;
+  renderRunModal(task);
+  runModalEl.hidden = false;
+  const first = runFormEl.querySelector("input, select");
+  if (first) {
+    first.focus();
+  } else {
+    runFormEl.focus();
+  }
+}
+
+function closeRunModal() {
+  pendingTask = null;
+  runFormEl.reset();
+  runModalEl.hidden = true;
+  runModalFieldsEl.innerHTML = "";
+  const fallbackFocusEl = returnFocusTaskID ? findStartButton(returnFocusTaskID) : null;
+  if (returnFocusEl && returnFocusEl.isConnected) {
+    returnFocusEl.focus();
+  } else if (fallbackFocusEl) {
+    fallbackFocusEl.focus();
+  }
+  returnFocusEl = null;
+  returnFocusTaskID = "";
+}
+
+function renderRunModal(task) {
+  runModalTitleEl.textContent = t("modal.runTitle", { task: task.Name || task.ID });
+  runModalMetaEl.textContent = t("modal.runMeta", { task: task.ID });
+  runModalFieldsEl.innerHTML = taskInputs(task).map(renderRunInputField).join("");
+}
+
+function renderRunInputField(input) {
+  const id = "input-" + input.ID.replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+  const required = input.Required ? " required" : "";
+  const description = input.Description ? '<div class="meta">' + escapeHTML(input.Description) + "</div>" : "";
+  const label = '<label for="' + escapeHTML(id) + '">' + escapeHTML(input.Name || input.ID) + "</label>";
+  if (input.Type === "choice") {
+    const blank = '<option value="">' + (input.Required ? t("select.choose") : t("select.noChoice")) + "</option>";
+    const options = blank + (input.Options || []).map((option) => {
+      const selected = option === input.Default ? " selected" : "";
+      return '<option value="' + escapeHTML(option) + '"' + selected + ">" + escapeHTML(option) + "</option>";
+    }).join("");
+    return '<div class="field">' + label + '<select id="' + escapeHTML(id) + '" name="' + escapeHTML(input.ID) + '"' + required + ">" + options + "</select>" + description + "</div>";
+  }
+  return '<div class="field">' + label + '<input id="' + escapeHTML(id) + '" name="' + escapeHTML(input.ID) + '" value="' + escapeHTML(input.Default || "") + '" autocomplete="off"' + required + ">" + description + "</div>";
+}
+
+function findStartButton(taskID) {
+  return Array.from(document.querySelectorAll("[data-start]"))
+    .find((button) => button.dataset.start === taskID) || null;
+}
+
 await initShell();
 document.addEventListener("builda:localechange", () => {
   renderRuns(latestRuns);
   renderFollowButton();
+  if (pendingTask) renderRunModal(pendingTask);
   void renderSelectedRun();
 });
 renderFollowButton();
