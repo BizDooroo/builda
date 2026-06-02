@@ -10,9 +10,6 @@ permissions:
   id-token: write
   attestations: write
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -27,17 +24,15 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.2
-
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.2 --activate
 
       - name: Install frontend dependencies
         run: pnpm --dir web install --frozen-lockfile
