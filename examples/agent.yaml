@@ -1,0 +1,19 @@
+role: agent
+
+agent:
+  # Must match an agent id configured on the controller.
+  id: "linux-android"
+  controller_url: "http://127.0.0.1:28080"
+  # Journal, local logs, and the agent token live here. Relative paths resolve
+  # from the directory holding this config file.
+  spool_dir: "spool"
+  # Every job path parameter is resolved beneath this root.
+  workspace_root: "/home/you/git/dooroo"
+  heartbeat_interval: "5s"
+  poll_timeout: "30s"
+  # Host-local shell startup. Credentials stay on this machine; never put
+  # secrets in controller job scripts.
+  script_header: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$HOME/.config/builda/env.sh"

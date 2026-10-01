@@ -222,23 +222,54 @@ func TestSampleConfigIsValid(t *testing.T) {
 	}
 }
 
-func TestRepositoryExampleConfigIsValid(t *testing.T) {
-	data, err := os.ReadFile("config.yaml")
+// TestRepositoryExampleConfigsAreValid keeps every shipped example loadable by
+// the loader its role actually uses.
+func TestRepositoryExampleConfigsAreValid(t *testing.T) {
+	legacy, err := os.ReadFile(filepath.Join("examples", "standalone-legacy.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := parseConfig(data)
+	cfg, err := parseConfig(legacy)
 	if err != nil {
-		t.Fatalf("repository config example must be valid: %v", err)
+		t.Fatalf("the standalone example must be valid: %v", err)
 	}
 	if cfg.Server.Address == "" || len(cfg.Server.Addresses) == 0 || cfg.Server.MaxHistory != defaultMaxHistory {
-		t.Fatalf("expected example config to cover server settings, got %#v", cfg.Server)
+		t.Fatalf("expected the standalone example to cover server settings, got %#v", cfg.Server)
 	}
 	if len(cfg.Tasks) == 0 || len(cfg.Tasks[0].Inputs) == 0 {
-		t.Fatalf("expected example config to cover task inputs, got %#v", cfg.Tasks)
+		t.Fatalf("expected the standalone example to cover task inputs, got %#v", cfg.Tasks)
+	}
+
+	controllerPath := filepath.Join("examples", controllerConfigName)
+	controller, err := loadControllerConfig(controllerPath)
+	if err != nil {
+		t.Fatalf("the controller example must load: %v", err)
+	}
+	if len(controller.Jobs) == 0 || len(controller.Catalogs) == 0 || len(controller.Agents) == 0 {
+		t.Fatalf("expected the controller example to cover jobs, catalogs, and agents, got %#v", controller)
+	}
+
+	agent, err := loadAgentConfig(filepath.Join("examples", agentConfigName))
+	if err != nil {
+		t.Fatalf("the agent example must load: %v", err)
+	}
+	if agent.Agent.ID == "" || agent.Agent.WorkspaceRoot == "" {
+		t.Fatalf("expected the agent example to be complete, got %#v", agent.Agent)
+	}
+
+	// Examples are published, so they must never carry a credential.
+	for _, path := range []string{controllerPath, filepath.Join("examples", agentConfigName)} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"token:", "password:", "secret:"} {
+			if strings.Contains(string(data), forbidden) {
+				t.Fatalf("%s must not contain %q", path, forbidden)
+			}
+		}
 	}
 }
-
 func TestHelpTextDocumentsConfigAuthoring(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "builda", "config.yaml")
 	help := helpText(configPath)

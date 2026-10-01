@@ -1,18 +1,12 @@
 # Security Rules
 
-- Builda is internal-only software. Treat every deployment as trusted-local or trusted-private-network only.
-- Add a clear disclaimer whenever documenting exposure or operation: the project is not hardened and security risks are expected to exist across the implementation.
-- Builda runs configured scripts by prepending `server.script_header` to the task script; the default header is `#!/usr/bin/env bash`. Treat every configured task and script header as privileged shell execution on the host.
-- Do not expose a running Builda server to untrusted networks without adding authentication, authorization, CSRF protection, and transport security.
-- The config editor can change scripts. Treat `/config` and `/api/config` as administrative surfaces.
-- `server.config_password` protects only the Web UI config editor and `/api/config`. CLI `builda config get/set` remains an administrator-local operation and must not require that password.
-- When `server.config_password` is omitted or empty, hide the config button in the Web UI and disable HTTP config editing.
-- The task run API must start only existing configured tasks. Never add an endpoint that accepts raw scripts from request bodies, query strings, or headers.
-- Query parameters on task run APIs may only provide values for configured task inputs; validate choice values and reject undeclared input names before queueing.
-- The task run API may also accept the reserved `wait` control query parameter; do not pass it to scripts as a task input.
-- Task input values are persisted in run state, written to run logs, and may appear in script output. Do not treat task inputs as a secret transport.
-- Keep the default sample address on loopback-style local operation. If documenting `0.0.0.0`, include an explicit warning about trusted-network use only.
-- The `--addr` flag may be repeated to bind specific interfaces. Document that `--addr` overrides `server.address` and `server.addresses`, and warn that `:PORT` or `0.0.0.0:PORT` binds broadly.
-- Do not commit secrets, tokens, private keys, local `.env` files, run logs, or script output.
-- Run `gitleaks detect --source . --no-banner --redact --verbose` before claiming the repository is safe to publish.
-- If a future task needs credentials, document environment-variable names but commit only `.env.example` with placeholder values.
+- Builda is internal-only software for a private network. Treat every deployment as trusted-private-network only, and state in any exposure documentation that the project is not hardened.
+- Job scripts and the agent `script_header` are privileged shell execution on the agent host. Only admin-configured jobs run; never add an endpoint that accepts a script from a request body, query string, or header.
+- The Web UI and every controller API, including run logs, require authentication. There must be no unauthenticated job, config, or log surface. Only the login page, the login call, and static page assets may be anonymous.
+- The admin credential is created locally with `builda controller admin set-password` before anyone can sign in from outside. Store it as a salted PBKDF2-HMAC-SHA256 verifier and rate limit failed logins per client.
+- Browser sessions use an HttpOnly, SameSite cookie, marked Secure over HTTPS. Require a CSRF token and a same-origin check on every browser state change. Bearer-token callers do not use CSRF.
+- Generate tokens randomly, return the raw secret exactly once, and persist only a verifier. Support rotation and revocation. Per-agent tokens reach only the agent API and only for their own agent identity.
+- Keep credentials in a protected file separate from config, with mode `0600`. Never return a verifier, salt, or hash from any API, and never write one into a config document.
+- Parameter values are persisted in run state, written to run logs, and may appear in script output. Do not treat a parameter as a secret transport; keep credentials in the agent environment, which never leaves the agent host.
+- Keep the sample listen address on loopback. Document that `0.0.0.0` or a bare `:PORT` exposes the controller broadly, and require HTTPS whenever traffic crosses a trust boundary.
+- Do not commit secrets, tokens, private keys, local `.env` files, run logs, agent spool contents, or script output. Run `gitleaks detect --source . --no-banner --redact --verbose` before claiming the repository is safe to publish.

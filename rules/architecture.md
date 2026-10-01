@@ -1,26 +1,39 @@
 # Architecture Rules
 
-- Keep Builda as a small single-binary Go server split into focused files by responsibility.
-- `main.go` owns entrypoint constants and embedding; keep config parsing/loading in `config.go`, runner execution in `runner.go`, HTTP handlers in `handlers.go`, shared types in `types.go`, and service installation support in `service*.go`.
-- Cobra command setup belongs in `cli.go`, with service command setup and platform details in `service*.go`.
-- The runner executes one task at a time. New task starts append `QUEUED` runs, and `dispatchLocked` starts the next queued run only when no run is active.
-- Persist run state in `log_dir/runs.json`. On restart, convert stale `RUNNING` runs to `ABORTED` and resume queued runs.
-- Bound completed run history with `server.max_history`, defaulting to 5000. Prune only terminal runs and keep queued/running runs even when they exceed the cap.
-- Resolve relative `server.log_dir` paths from the directory containing the active config file, not from the process working directory.
-- Preserve each run's task snapshot so later config edits do not rewrite historical run metadata.
-- Keep task run APIs tied to configured task IDs. Do not accept arbitrary script strings through the run API.
-- Task run inputs must be declared on the task config, validated before queueing, persisted on the run, and passed to scripts through `BUILDA_INPUT_*` environment variables.
-- Keep platform-specific task shell startup in `server.script_header`, and copy that header onto each runtime task snapshot so queued and historical runs preserve the execution environment used when they were requested.
-- `wait` is reserved as a task run API control query parameter. `wait=1` should block until the queued run reaches a terminal state and return the run log with the response.
-- Keep run-list filtering as a read-only task ID filter over persisted summaries; it must not alter queue or run state.
-- Keep log reads confined to the configured log directory and derive log filenames from run IDs.
-- Run history deletion should remove the persisted run entry and its derived log file, and should reject queued or running runs.
-- Task API copy controls must work outside Clipboard API secure-context support by keeping a textarea/`execCommand("copy")` fallback.
-- The Web UI source lives under `web/` as an Astro static frontend. Go embeds only `web/dist/`; keep the built dist committed so `go install github.com/BizDooroo/builda@latest` does not require Node or pnpm.
-- Keep the Web UI as an operational workspace: the home page should surface queue health and each task's latest run, the runs page should keep status filters plus log copy/follow controls, and direct `/runs/{id}` detail pages should stay aligned with the main runs inspector.
-- Do not replace rendered log DOM during polling unless the displayed log text or selected run changes; stable completed logs must remain selectable for manual copy.
-- Keep daemon installation user-scoped. Linux installs should target systemd user units, and macOS installs should target launchd LaunchAgents; do not require root-owned system service files unless explicitly requested.
-- Config write paths, including CLI commands and HTTP handlers, must parse and validate YAML before replacing the current config file.
-- A running server should reload the active config file after it changes so `builda config set` updates configured tasks without a daemon restart.
-- Keep `server.address` as the backward-compatible single listen address and `server.addresses` as the multi-address config list; repeated `--addr` values override both.
-- Use `tasks[].script` for task bodies; do not reintroduce `tasks[].command`.
+## Roles
+- Builda ships one binary with two operational roles. The controller owns jobs, catalogs, agent definitions, the central queue, run history, and logs. The agent connects outbound and executes. Keep `builda serve` as the deprecated standalone role for migration only, and do not give it back a Web UI.
+- Agents never listen on a port. All agent traffic is outbound HTTP long polling to `/api/agent/v1/*`. Never add a controller-to-agent dial path.
+- Keep Go files focused and under 500 lines: `ctrl*.go` for controller state, scheduling, auth, and HTTP; `api_*.go` for endpoints; `agent*.go` for the agent; `migrate*.go` for migration; `cli*.go` and `service*.go` for commands and daemons.
+
+## Config and parameters
+- Controller config is one validated YAML document holding server settings, catalogs, jobs, and agent definitions. It never holds credentials.
+- A choice parameter takes either inline options or a catalog, never both. A catalog filter keeps an option only when it carries every listed label, so one catalog entry can serve several jobs at once.
+- Parameters reach scripts only as `BUILDA_PARAM_*` environment variables. Never interpolate a parameter value into script text. Reject two declarations that normalize to the same variable name, and strip inherited `BUILDA_*` variables before execution.
+- Resolve every option `path` under the agent workspace root, rejecting absolute paths, `..` segments, and symlinks that leave the root. Validate statically in config and again on the agent before execution.
+- Snapshot the job, parameters, option metadata, labels, and timeout onto the execution at enqueue. A later config edit must never rewrite history.
+
+## Queue and scheduling
+- One central queue. Consider queued items in enqueue order so a blocked item never stalls the items behind it, and among eligible agents pick the oldest last assignment, breaking ties by agent ID.
+- An agent is eligible when it is online, enabled, unpaused, free, unblocked, and carries every job label.
+- One job at a time per agent. Different agents run in parallel and the same project may build concurrently; there is no project lock.
+- Agent liveness is in-memory only. After a controller restart every agent is offline until it polls, so nothing is scheduled on a stale view.
+
+## State and lifecycle
+- Persist run and assignment state in one JSON snapshot, written atomically with mode `0600`. Apply every mutation to a clone and commit only after the write succeeds, so a persistence failure never acknowledges an enqueue, assignment, or start.
+- States are `QUEUED`, `ASSIGNED`, `RUNNING`, `CANCELING`, and the terminal `SUCCESS`, `FAILED`, `CANCELED`, `ABORTED`. Bound terminal history with `server.max_history`, defaulting to 5000, and never prune a queued or active execution.
+- An agent journals an accepted assignment durably before acting, then obtains a start permit. Serialize granting the permit against cancellation so a duplicate message cannot start a second process.
+- Cancel a queued execution immediately. Cancel an assigned one by revoking its permit, which proves the script never started. Cancel a running one by killing the process group and only finalize once the agent confirms; while the agent is unreachable keep the cancellation pending and keep the slot held.
+- Refuse to delete an agent that still owns an active or blocked execution.
+
+## Recovery
+- A controller restart must not abort running work, and must not reassign an execution whose start permit was granted. Requeue only an assignment that provably never started.
+- An agent restart must never re-execute an incomplete run. Prove the process group ended and report `ABORTED`, or block the execution for operator attention. Never kill a process whose ownership cannot be proven, and never accept new work while blocked.
+- Logs are written to the agent disk first and uploaded at byte offsets. Duplicate chunks are idempotent, a gap is refused with the durable offset, and a result is confirmed only once the controller holds every byte. The log file length is the durable record and is re-read on restart.
+- A job that exceeds its timeout is reported as `FAILED` with the failure reason `timeout`.
+
+## Web UI
+- The Web UI source lives under `web/` as an Astro static frontend. Go embeds only `web/dist/`; keep the built dist committed so `go install` needs no Node toolchain.
+- Give every shared script module its own output chunk. Letting the bundler merge shared modules makes the generated export order vary between builds and breaks the CI comparison against the committed dist.
+- Management screens are dedicated forms, not a raw YAML box. Keep the validated YAML editor as an escape hatch on the settings page.
+- Do not replace rendered log DOM during polling unless the displayed log text or the selected run changes, and keep the log element out of the translation pass, or a selection is lost on every tick.
+- Send only the fields an API accepts. The config APIs reject unknown fields, so never post a list or detail view object straight back.

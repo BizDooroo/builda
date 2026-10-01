@@ -1,271 +1,151 @@
-# Builda Task Runner
+# Builda
 
-Builda is a small Go web server for running preconfigured shell tasks from `config.yaml`. It shows configured tasks, queues runs one at a time, records run state, and stores per-run logs.
+Builda runs build jobs on remote machines from one central controller.
+
+- The **controller** owns jobs, reusable catalogs, agent definitions, one central queue, run history, and logs. It serves the Web UI and the HTTP API.
+- An **agent** connects outbound to the controller, runs one job at a time, and streams logs back. Agents never listen on a port, so no inbound firewall rule is needed on a build machine.
+
+A single binary provides both roles plus the migration tooling. The Web UI is embedded, so `go install` needs no Node toolchain.
 
 ## Security Posture
 
-> DISCLAIMER: Builda is intended only for internal, trusted, local operation. It is not a hardened product, and security risks are intentionally not fully addressed across the codebase. Assume security issues are scattered throughout the current implementation.
+> DISCLAIMER: Builda is an internal tool for a private, trusted network. It is not a hardened product, and security issues are expected to exist across the implementation. Do not expose it to the public internet.
 
-The repository is safe to publish from a secret-scanning perspective as of the latest local check: `gitleaks detect --source . --no-banner --redact --verbose` reported no leaks.
+The controller requires authentication on the Web UI and on every API, including run logs. There is no unauthenticated job, config, or log surface, and there is no endpoint that accepts a script from a request: only admin-configured jobs run.
 
-Do not expose a running Builda instance to the public internet or any untrusted network. Builda intentionally executes configured scripts as Bash scripts, and the Web UI can include a config editor that changes those scripts. Authentication, authorization, CSRF protection, transport security, audit logging, tenant isolation, and other production security controls are absent.
+What is implemented:
 
-Binding to `:28088` or `0.0.0.0:28088` can make Builda reachable on every network interface. Use those addresses only on machines and networks you fully trust.
+- A single admin account whose password is stored as a salted PBKDF2-HMAC-SHA256 verifier, with per-client login rate limiting.
+- Browser sessions in an HttpOnly, SameSite cookie, marked Secure over HTTPS, with a CSRF token required on every browser state change plus a same-origin check.
+- API bearer tokens for external automation, and per-agent tokens that only reach the agent API and only for their own agent identity.
+- Secrets are generated randomly, shown once, and stored only as verifiers in a separate credential file with mode `0600`. No API response ever returns a verifier.
+
+What is not implemented: transport security of its own, authorization roles, audit logging, tenant isolation, and the rest of a production security program. **Put the controller behind HTTPS whenever traffic crosses a trust boundary**, for example a reverse proxy terminating TLS on the same host. Binding to `:28080` or `0.0.0.0:28080` exposes the controller on every interface; use those only on a network you fully trust.
+
+Job scripts are privileged shell execution on the agent host. Treat every job, every catalog path, and the agent shell header as such.
 
 ## Install
-
-Install the latest tagged version with Go:
 
 ```bash
 go install github.com/BizDooroo/builda@latest
 ```
 
-Install a specific version:
+Prebuilt binaries for Linux and macOS on `amd64` and `arm64` are published on the [GitHub Releases page](https://github.com/BizDooroo/builda/releases). Windows is not published because jobs run through `/usr/bin/env bash`.
+
+## Quick start
+
+On the controller host:
 
 ```bash
-go install github.com/BizDooroo/builda@v0.1.0
+builda controller sample-config > controller.yaml
+builda controller admin set-password --config controller.yaml
+builda controller agent token linux-android --config controller.yaml   # prints the token once
+builda controller serve --config controller.yaml
 ```
 
-Prebuilt binaries are published on the [GitHub Releases page](https://github.com/BizDooroo/builda/releases) for Linux and macOS on `amd64` and `arm64`. Download the archive for your platform, unpack it, and run the `builda` binary.
+The admin credential can only be created locally with the CLI. Until it exists, no one can sign in from outside.
 
-Windows binaries are not published by default because Builda executes tasks through `/usr/bin/env bash`; Windows users need a POSIX-compatible shell environment with Bash.
-
-## Run
-
-With an installed binary:
+On each agent host:
 
 ```bash
-builda
+builda agent sample-config > agent.yaml
+# edit agent.id, controller_url, workspace_root, and script_header
+builda agent enroll --config agent.yaml --token-file token.txt
+builda agent run --config agent.yaml
 ```
 
-Open `http://localhost:28088`.
+## Jobs, catalogs, and parameters
 
-On first run, Builda creates a default config at the operating system's user config location:
+A job declares the labels an agent must carry, a timeout, a script, and its parameters. A parameter is `string`, `choice`, or `boolean`. A choice parameter takes either inline options or a shared catalog filtered by requiring every listed label, so one `projects` catalog can feed both an Android job and an iOS job and a new project appears in both at once.
 
-- Linux: `$XDG_CONFIG_HOME/builda/config.yaml` or `~/.config/builda/config.yaml`
-- macOS: `~/Library/Application Support/builda/config.yaml`
+Parameters reach the script only as environment variables, never by text substitution, so a value cannot introduce shell expansion:
 
-The sample config uses `server.log_dir: "logs"`, and relative log directories are resolved from the config file directory. With the default config, run logs and `runs.json` are stored under the same Builda config directory, for example `~/.config/builda/logs`. Builda keeps at most `server.max_history` completed run records, defaulting to 5000, and always preserves queued and running runs.
+| Variable | Meaning |
+| --- | --- |
+| `BUILDA_PARAM_<ID>` | the selected value |
+| `BUILDA_PARAM_<ID>_LABEL` | the display label of the selected option |
+| `BUILDA_PARAM_<ID>_<FIELD>` | one entry of the selected option's `values` map |
+| `BUILDA_WORKSPACE` | the agent workspace root |
+| `BUILDA_JOB_ID`, `BUILDA_JOB_NAME`, `BUILDA_EXECUTION_ID`, `BUILDA_AGENT_ID` | execution identity |
 
-Run with an explicit config file:
+Two parameters that normalize to the same variable name are rejected when the config is validated, and inherited `BUILDA_*` variables are dropped before the script runs so a parent process cannot spoof a value. A `path` entry on an option is resolved under the agent workspace root; absolute paths, `..` segments, and symlinks that leave the root are refused.
 
-```bash
-builda --config config.yaml
+Run `builda controller --help` for the full config reference.
+
+## Queue and scheduling
+
+There is one central queue. Each free, online, enabled, unpaused agent whose labels cover the job receives the earliest runnable item; an item that nothing can run does not stall the items behind it. Among eligible agents the one with the oldest last assignment wins, breaking ties by agent ID.
+
+An agent runs one job at a time. Different agents run in parallel, and the **same project may build on two agents at once** — this is deliberate, there is no project lock.
+
+The queue page explains why each waiting item is waiting: no matching labels, offline, paused, disabled, or busy.
+
+## Execution lifecycle
+
+```
+QUEUED -> ASSIGNED -> RUNNING -> SUCCESS | FAILED | CANCELED | ABORTED
+                         └─ CANCELING while a running cancellation is outstanding
 ```
 
-Print the installed version:
+- An agent journals an accepted assignment durably, then asks the controller for a start permit. Granting the permit is serialized against cancellation, so a duplicate message can never start a second process.
+- Cancelling a queued execution is immediate. Cancelling an assigned one revokes the permit, which proves the script never started. Cancelling a running one kills the whole process group, and the execution is only marked `CANCELED` once the agent confirms. If the agent is offline the cancellation stays durably pending: the slot is not released and no completion is invented.
+- A job that exceeds its timeout is reported as `FAILED` with the failure reason `timeout`.
+- Losing the connection never stops a build. Heartbeats run on their own goroutine while a script executes, uploads, or polls.
 
-```bash
-builda version
-```
+## Recovery
 
-The version output includes the version, commit hash, and build date when that
-metadata is available. Go module installs may report `commit unknown` and
-`built unknown`; GitHub Release binaries include those fields through the
-release build.
-
-Create a starter config:
-
-```bash
-builda sample-config > config.yaml
-```
-
-Print the active config path:
-
-```bash
-builda config path
-builda --config config.yaml config path
-```
-
-Print or replace the active config file:
-
-```bash
-builda config get
-builda --config config.yaml config set new-config.yaml
-cat new-config.yaml | builda --config config.yaml config set
-```
-
-`builda config set` validates the YAML before writing. Invalid config input is rejected without replacing the current config file. CLI config commands are intended for administrators and do not require the Web UI config password. A running Builda server reloads the changed config file automatically, so task changes become available without restarting the daemon.
-
-During development from this repository, use the checked-in sample config explicitly:
-
-```bash
-go run . --config config.yaml
-```
-
-Override the configured bind address with `--addr`:
-
-```bash
-go run . --config config.yaml --addr :28088
-go run . --config config.yaml --addr 127.0.0.1:28088 --addr 192.168.10.5:28088
-go run . --config config.yaml --addr 0.0.0.0:28088
-```
-
-When `--addr` is provided, it overrides `server.address` and `server.addresses`. Repeat `--addr` to bind only the network interfaces you want.
-
-## Daemon Install
-
-Builda can install itself as a user-level daemon. The install command creates the default config when needed, writes the service definition, enables it, and starts it by default.
-
-Ubuntu 24.04 and other systemd Linux distributions use a systemd user unit:
-
-```bash
-builda service install
-systemctl --user status builda.service
-```
-
-The unit is written to `$XDG_CONFIG_HOME/systemd/user/builda.service` or `~/.config/systemd/user/builda.service`. User services usually start after the user logs in. To allow the service to start at boot before login, enable linger outside Builda:
-
-```bash
-sudo loginctl enable-linger "$USER"
-```
-
-macOS uses a launchd LaunchAgent:
-
-```bash
-builda service install
-launchctl print "gui/$(id -u)/com.bizdooroo.builda"
-```
-
-The plist is written to `~/Library/LaunchAgents/com.bizdooroo.builda.plist`.
-
-Useful service commands:
-
-```bash
-builda --config /path/to/config.yaml service install --force
-builda --config /path/to/config.yaml --addr 127.0.0.1:28088 service install
-builda service install --dry-run
-builda service print --target linux
-builda service print --target darwin
-builda service status
-builda service restart
-builda service stop
-builda service start
-builda service uninstall
-```
-
-Use `--binary /path/to/builda` when installing from a temporary working directory and you want the daemon to keep using a stable binary path. Use `--start=false` to write and enable the service without starting it immediately.
-
-The service file stores the exact binary path in `ExecStart` or
-`ProgramArguments`. After installing a newer Builda binary, reinstall or
-overwrite the service from the intended binary path and restart it:
-
-```bash
-builda service install --force --binary "$(command -v builda)"
-builda service restart
-```
-
-Do not install a daemon that binds to `:PORT` or `0.0.0.0:PORT` unless the machine and network are trusted and protected. Builda is internal-only software and is not hardened for untrusted access.
-
-## Configuration
-
-Tasks are managed in YAML:
-
-```yaml
-server:
-  addresses:
-    - "127.0.0.1:28088"
-  log_dir: "logs"
-  max_history: 5000
-  script_header: |
-    #!/usr/bin/env bash
-  # Set this to enable and protect the Web UI config editor.
-  # config_password: "change-me"
-
-tasks:
-  - id: "hello"
-    name: "Hello world"
-    description: "Print a greeting"
-    script: "echo hello $BUILDA_INPUT_NAME"
-    timeout: "30s"
-    inputs:
-      - id: "name"
-        name: "Name"
-        type: "string"
-        default: "world"
-      - id: "environment"
-        name: "Environment"
-        type: "choice"
-        default: "local"
-        options:
-          - "local"
-          - "staging"
-          - "prod"
-```
-
-Fields:
-
-- `server.address`: single HTTP listen address used when `--addr` is not provided. Keep this local or trusted-network only.
-- `server.addresses`: optional list of HTTP listen addresses used when `--addr` is not provided. Use this to bind multiple specific interfaces, such as `127.0.0.1:28088` and `192.168.0.40:28088`.
-- `server.log_dir`: directory for run logs and `runs.json` state. Relative paths are resolved from the directory containing the config file.
-- `server.max_history`: maximum number of completed run history entries to retain in `runs.json`. Defaults to `5000`; queued and running runs are always retained.
-- `server.config_password`: optional password for the Web UI config editor and `/api/config`. When omitted or empty, the home page hides the config button and the HTTP config editor is disabled.
-- `server.script_header`: optional Bash script header prepended to every task script. Defaults to `#!/usr/bin/env bash`. Use this for platform-specific startup such as `PATH` exports or shell profile sourcing.
-- `tasks[].id`: stable task identifier used by the UI and API.
-- `tasks[].name`: display name. Defaults to `id` when omitted.
-- `tasks[].description`: optional short description shown in the task list.
-- `tasks[].script`: Bash script body. Builda prepends `server.script_header`, then runs the configured script.
-- `tasks[].timeout`: optional Go duration such as `30s` or `5m`.
-- `tasks[].inputs`: optional run-time inputs. Each input has an `id`, optional `name` and `description`, `type` (`string`, `input`, or `choice`), optional `default`, optional `required`, and `options` for `choice`.
-
-Input IDs become environment variables for the script as `BUILDA_INPUT_{ID}` with hyphens converted to underscores and letters uppercased. For example, `id: "target-env"` is available as `$BUILDA_INPUT_TARGET_ENV`. `wait` is reserved for the task run API and cannot be used as an input ID. Run inputs are stored with run state, so do not use them for secrets.
+- **Controller restart.** Queues and assignments are restored from the snapshot. Running work is not aborted. Every agent counts as offline until it polls again, so nothing is reassigned on a stale view.
+- **Agent restart.** An incomplete run is never re-executed. The agent proves the process group it started has ended and reports `ABORTED`, or, if ownership or termination cannot be proven, it blocks that execution for operator attention instead of killing a process it cannot prove it owns or accepting more work. Resolve such a run from the UI or with `POST /api/runs/{id}/resolve`.
+- **Logs.** An agent writes its log to disk first and uploads it at byte offsets. Duplicate chunks are idempotent, a gap is refused with the durable offset so the agent retransmits, and a result is only confirmed once the controller holds every log byte. The agent keeps its local log and result until the controller acknowledges both.
+- **Persistence.** Run and assignment state live in one JSON snapshot written atomically with mode `0600`. Every mutation fails closed: if the snapshot cannot be written, the enqueue, assignment, or start is not acknowledged.
 
 ## Web UI
 
-The first screen shows all configured tasks and the latest 10 runs. The task list shows each task's name, description, expand button, and run button; expanded details include the script, configured inputs, and API address. If a task has inputs, pressing Run opens a popup for string fields and choice selectors before appending the run to the queue. Builda executes one run at a time and starts the next queued run after the active run finishes.
-
-Open `/runs` for the full run list workspace. The run list shows request time, start time, elapsed time, and completed duration; tablet and mobile layouts switch the run list to a dropdown selector. Selecting a run shows its detail and log in the right pane. Logs refresh while a run is queued or running, and each run records request, start, parameters, finish, and cancellation times. Completed run history entries can be deleted from the detail pane, which also removes the derived log file.
-
-Open `/runs?task=hello` to show only runs for one task in the run list workspace.
-
-The top-right controls switch color scheme (`dark`, `light`, or `system`) and locale (`en` or `ko`) locally in the browser.
-
-When `server.config_password` is set, the config editor is available at `/config` and requires that password before loading or saving YAML. When the password is omitted, the home page does not show the config button and the HTTP config editor is disabled.
-
-The Web UI source is an Astro static frontend in `web/`. Builda embeds only the built `web/dist/` files into the Go binary. The built dist files are committed so `go install github.com/BizDooroo/builda@latest` can build the single binary without requiring Node or pnpm.
+Sign in at `/login`. The screens are jobs, queue, history, catalogs, agents, and settings. Management uses dedicated forms rather than a raw YAML box; the validated YAML editor remains on the settings page. Logs follow live, stay selectable while polling, and copy works outside a secure context. The UI ships Korean and English and a light/dark/system theme toggle.
 
 ## API
 
-Start a task by ID:
+All endpoints require a session cookie or an `Authorization: Bearer` API token. Browser state changes additionally require the `X-Builda-CSRF` header.
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET/POST /api/jobs`, `GET/PUT/DELETE /api/jobs/{id}` | job CRUD |
+| `POST /api/jobs/{id}/runs` | enqueue a run from declared parameters |
+| `GET/POST /api/catalogs`, `GET/PUT/DELETE /api/catalogs/{id}` | catalog CRUD |
+| `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/{id}` | agent CRUD |
+| `POST/DELETE /api/agents/{id}/token` | issue, rotate, or revoke an agent token |
+| `GET /api/queue`, `POST /api/queue/cancel` | queue inspection and batch cancel |
+| `GET /api/runs` | history, filtered by `job`, `project`, `agent`, `status`, paginated with `limit` and `offset` |
+| `GET /api/runs/{id}`, `GET /api/runs/{id}/log` | run detail and a bounded log window |
+| `POST /api/runs/{id}/cancel`, `/rerun`, `/resolve`, `DELETE /api/runs/{id}` | run actions |
+| `GET/POST /api/config`, `GET/POST /api/tokens`, `DELETE /api/tokens/{id}` | administration |
+| `POST /api/agent/v1/{poll,permit,heartbeat,log,result,attention}` | agent protocol |
+
+`wait=1` on a run request blocks until the execution finishes and returns the run with its log. Disconnecting never cancels it.
 
 ```bash
-curl -X POST http://localhost:28088/api/tasks/hello/run
+curl -H "Authorization: Bearer $TOKEN" \
+  -X POST "http://controller:28080/api/jobs/android-build/runs?project=focus_stopwatch&action=release&wait=1"
 ```
 
-Pass configured inputs as query parameters:
+## Migrating from the standalone role
+
+`builda serve` is the deprecated standalone role, kept so an existing installation can keep running while its history moves across. It no longer serves a Web UI; its JSON API stays available.
+
+Every `builda migrate` subcommand reports what it would do and changes nothing until `--apply` is passed, and the legacy installation is only ever read. See `builda migrate --help` for the export, plan, config, and import steps, and for the rollback procedure.
+
+## Running as a user daemon
 
 ```bash
-curl -X POST "http://localhost:28088/api/tasks/hello/run?name=Builda&environment=local"
+builda controller service install --binary "$(command -v builda)"
+builda agent service install --binary "$(command -v builda)"
+builda controller service status
+builda controller service diagnose      # reports health and repair commands, changes nothing
 ```
 
-Wait for a run to finish and return its summary plus log:
+Linux installs a systemd user unit; macOS installs a launchd LaunchAgent. The service runs the Builda executable directly — no shell, wrapper, or login session — and install refuses a target that is not a stable executable regular file or whose role config does not parse. On macOS the agent is pinned to the desktop login session, so install and start must run from a terminal on that Mac rather than over SSH.
 
-```bash
-curl -X POST "http://localhost:28088/api/tasks/hello/run?wait=1"
-```
-
-Legacy form-compatible start endpoint:
-
-```bash
-curl -X POST -d task_id=hello http://localhost:28088/api/tasks/start
-```
-
-Other useful endpoints:
-
-- `GET /api/meta`: server metadata for the static Web UI, including hostname, log directory, start time, config path, version, commit, build date, and whether config editing is enabled.
-- `GET /api/state`: current tasks and run summaries. Add `?task={taskID}` to return only runs for one task.
-- `GET /api/runs/{runID}`: one run summary.
-- `DELETE /api/runs/{runID}`: delete a completed run history entry and its log file. Queued and running runs return `409 Conflict`.
-- `POST /api/runs/{runID}/cancel`: cancel a queued or running task.
-- `GET /api/runs/{runID}/log`: run log text.
-- `GET /api/config`: current YAML config, only when the Web UI config password is provided.
-- `POST /api/config`: save YAML config after validation, only when the Web UI config password is provided.
-
-## Persistence
-
-Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state after a restart is marked `ABORTED`; queued runs are resumed.
-
-`logs/` is intentionally ignored by Git because script output may contain local paths or secrets.
+Service files pin an absolute binary path. After `go install` or unpacking a new release, reinstall with `--force --binary "$(command -v builda)"` and restart.
 
 ## Development
 
@@ -273,25 +153,18 @@ Run state is persisted in `logs/runs.json`. Any run found in `RUNNING` state aft
 pnpm --dir web install --frozen-lockfile
 pnpm --dir web build
 make fmt lint test build
+go test -race ./...
 ```
 
-Run `pnpm --dir web build` after changing files under `web/src/` and commit the resulting `web/dist/` changes with the source changes.
+Rebuild `web/dist` after changing anything under `web/src/` and commit the result with the source change; CI compares a fresh build against the committed assets.
 
 ## Release
 
-Releases are tag-driven. Push a semantic version tag to build and publish GitHub Release assets:
+Releases are tag-driven:
 
 ```bash
 git tag -a v0.1.0 -m "builda v0.1.0"
 git push origin v0.1.0
 ```
 
-The release workflow runs tests, builds Linux and macOS archives with GoReleaser, uploads `checksums.txt`, and generates GitHub artifact attestations for the release artifacts.
-
-Before publishing a release, run:
-
-```bash
-go test ./...
-git diff --check
-gitleaks detect --source . --no-banner --redact --verbose
-```
+Before publishing, run `go test ./...`, `git diff --check`, and `gitleaks detect --source . --no-banner --redact --verbose`.
