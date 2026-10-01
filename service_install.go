@@ -15,9 +15,16 @@ import (
 // Validation happens before anything is written so a bad target never becomes
 // a crash-looping daemon.
 func runServiceInstall(cmd *cobra.Command, serveOpts *serveOptions, opts *serviceOptions) error {
-	spec, err := buildServiceSpec(serveOpts, opts, !opts.dryRun)
+	spec, err := buildServiceSpec(serveOpts, opts)
 	if err != nil {
 		return err
+	}
+	// Only the default config path is created on demand. An explicit --config
+	// that does not exist is a mistake, not a request for a sample tree.
+	if !opts.dryRun && !opts.explicitConfig {
+		if err := ensureRoleConfig(spec.ConfigPath, roleSampleConfig(opts.role)); err != nil {
+			return fmt.Errorf("initialize config: %w", err)
+		}
 	}
 	if !opts.dryRun && spec.TargetOS != runtime.GOOS {
 		return fmt.Errorf("cannot install %s service on %s; use --dry-run or service print to generate files for another OS", spec.TargetOS, runtime.GOOS)
@@ -136,7 +143,7 @@ func renderServicePlan(commands []serviceCommand) string {
 	return b.String()
 }
 
-func buildServiceSpec(serveOpts *serveOptions, opts *serviceOptions, ensureConfig bool) (serviceSpec, error) {
+func buildServiceSpec(serveOpts *serveOptions, opts *serviceOptions) (serviceSpec, error) {
 	name, err := normalizeServiceName(opts.name)
 	if err != nil {
 		return serviceSpec{}, err
@@ -166,11 +173,6 @@ func buildServiceSpec(serveOpts *serveOptions, opts *serviceOptions, ensureConfi
 	configPath, err = filepath.Abs(configPath)
 	if err != nil {
 		return serviceSpec{}, err
-	}
-	if ensureConfig {
-		if err := ensureRoleConfig(configPath, roleSampleConfig(opts.role)); err != nil {
-			return serviceSpec{}, fmt.Errorf("initialize config: %w", err)
-		}
 	}
 	return serviceSpec{
 		Name:       name,

@@ -79,22 +79,64 @@ func transientDirs() []string {
 	return dirs
 }
 
+// executableMagics are the first bytes of the native executable formats a
+// Builda build produces: ELF, the four Mach-O variants, and a Mach-O fat
+// binary.
+var executableMagics = [][]byte{
+	{0x7f, 'E', 'L', 'F'},
+	{0xfe, 0xed, 0xfa, 0xce},
+	{0xce, 0xfa, 0xed, 0xfe},
+	{0xfe, 0xed, 0xfa, 0xcf},
+	{0xcf, 0xfa, 0xed, 0xfe},
+	{0xca, 0xfe, 0xba, 0xbe},
+	{0xbe, 0xba, 0xfe, 0xca},
+}
+
 // rejectScriptBinary refuses a script target so the daemon is never a shell.
+// A shebang is the obvious case; a text file without one is caught too,
+// because it would otherwise only fail later as an exec format error at spawn
+// time, where the cause is far from obvious.
 func rejectScriptBinary(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("service binary %q is not readable: %w", path, err)
 	}
 	defer file.Close()
-	header := make([]byte, 2)
+	header := make([]byte, 4)
 	read, err := file.Read(header)
 	if err != nil && read == 0 {
 		return fmt.Errorf("service binary %q is empty", path)
 	}
+	header = header[:read]
 	if read >= 2 && header[0] == '#' && header[1] == '!' {
 		return fmt.Errorf("%w: %q is a script with a #! interpreter line; the service target must be the Builda executable itself so the daemon never runs a shell", errUnstableServiceBinary, path)
 	}
+	for _, magic := range executableMagics {
+		if read >= len(magic) && string(header[:len(magic)]) == string(magic) {
+			return nil
+		}
+	}
+	if looksLikeText(header) {
+		return fmt.Errorf("%w: %q starts with text rather than native executable code; the service target must be the Builda executable itself", errUnstableServiceBinary, path)
+	}
 	return nil
+}
+
+// looksLikeText reports whether every leading byte is printable ASCII or
+// common whitespace, which no native executable header is.
+func looksLikeText(header []byte) bool {
+	if len(header) == 0 {
+		return false
+	}
+	for _, b := range header {
+		if b == '\t' || b == '\n' || b == '\r' {
+			continue
+		}
+		if b < 0x20 || b > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // validateServiceRoleConfig parses the config the daemon will load so an

@@ -43,9 +43,34 @@ func withoutTransientRoots(t *testing.T) {
 func TestValidateServiceBinaryAcceptsStableExecutable(t *testing.T) {
 	withoutTransientRoots(t)
 	home := t.TempDir()
-	path := writeExecutable(t, filepath.Join(home, "bin", "builda"), "\x7fELF\x02\x01\x01builda", 0o755)
-	if err := validateServiceBinary(path); err != nil {
-		t.Fatalf("expected a stable executable to be accepted, got %v", err)
+	for name, content := range map[string]string{
+		"elf":       "\x7fELF\x02\x01\x01builda",
+		"macho":     "\xcf\xfa\xed\xfebuilda",
+		"macho-fat": "\xca\xfe\xba\xbebuilda",
+	} {
+		path := writeExecutable(t, filepath.Join(home, "bin", name), content, 0o755)
+		if err := validateServiceBinary(path); err != nil {
+			t.Fatalf("expected %s to be accepted, got %v", name, err)
+		}
+	}
+	// The real binary under test is the best format fixture available. Its
+	// path is inside the Go build cache, which validateServiceBinary rejects
+	// on purpose, so only the format check applies here.
+	if self, err := os.Executable(); err == nil {
+		if err := rejectScriptBinary(self); err != nil {
+			t.Fatalf("expected a real native executable to pass the format check, got %v", err)
+		}
+	}
+}
+
+// TestValidateServiceBinaryRejectsTextWithoutAShebang covers the script that
+// would otherwise only fail later as an exec format error at spawn time.
+func TestValidateServiceBinaryRejectsTextWithoutAShebang(t *testing.T) {
+	withoutTransientRoots(t)
+	path := writeExecutable(t, filepath.Join(t.TempDir(), "bin", "wrapper"), "exec builda controller serve\n", 0o755)
+	err := validateServiceBinary(path)
+	if err == nil || !strings.Contains(err.Error(), "starts with text") {
+		t.Fatalf("expected a text target to be rejected, got %v", err)
 	}
 }
 

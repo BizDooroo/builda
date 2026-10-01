@@ -168,3 +168,66 @@ func TestServiceInstallDryRunDoesNotCreateConfig(t *testing.T) {
 		t.Fatalf("dry run must not write the unit file")
 	}
 }
+
+// TestServicePlistProcessTypePerRole covers the launchd scheduling tier: a
+// Background job sits on a throttled CPU and I/O tier and its children inherit
+// it, which would throttle every compiler an agent starts.
+func TestServicePlistProcessTypePerRole(t *testing.T) {
+	if got := servicePlistProcessType(RoleAgent); got != "Adaptive" {
+		t.Fatalf("an agent runs builds and must not be throttled, got %q", got)
+	}
+	for _, role := range []string{RoleController, RoleStandalone} {
+		if got := servicePlistProcessType(role); got != "Background" {
+			t.Fatalf("role %q should be a background service, got %q", role, got)
+		}
+	}
+}
+
+// TestServiceInstallValidatesBeforeCreatingAnything is the regression guard
+// for an install that created a sample config tree from a mistyped --config
+// before it validated anything.
+func TestServiceInstallValidatesBeforeCreatingAnything(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	missing := filepath.Join(home, "typo", "controller.yaml")
+
+	_, err := newTestRoot(t, "controller", "service", "install", "--target", "linux",
+		"--binary", "/usr/local/bin/builda", "--config", missing)
+	if err == nil {
+		t.Fatal("expected the install to fail on an explicit config that does not exist")
+	}
+	if _, statErr := os.Stat(filepath.Dir(missing)); !os.IsNotExist(statErr) {
+		t.Fatalf("an explicit --config must never create a sample tree, stat error %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "builda-controller.service")); !os.IsNotExist(statErr) {
+		t.Fatal("a failed validation must not leave a unit file behind")
+	}
+}
+
+// TestServiceInstallRejectsAnInvalidRoleConfig keeps a unit from being written
+// for a config the daemon would refuse to load.
+func TestServiceInstallRejectsAnInvalidRoleConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	configPath := filepath.Join(home, "agent.yaml")
+	// An agent config is not a controller config.
+	if err := os.WriteFile(configPath, []byte(sampleAgentConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withoutTransientRoots(t)
+	binary := writeExecutable(t, filepath.Join(home, "bin", "builda"), "\x7fELFbuilda", 0o755)
+
+	out, err := newTestRoot(t, "controller", "service", "install", "--target", "linux",
+		"--binary", binary, "--config", configPath)
+	if err == nil {
+		t.Fatalf("expected the install to reject an agent config for the controller role, got:\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "controller config is required") {
+		t.Fatalf("expected a role mismatch error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "builda-controller.service")); !os.IsNotExist(statErr) {
+		t.Fatal("a rejected config must not leave a unit file behind")
+	}
+}

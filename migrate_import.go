@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,10 @@ type importReport struct {
 	Diagnostics []string
 }
 
+// errHistoryCapTooSmall stops an import that the controller's terminal history
+// cap would silently truncate.
+var errHistoryCapTooSmall = errors.New("controller history cap is too small for this import")
+
 // importBundle writes legacy history into a controller state store. It never
 // enqueues work: only terminal legacy runs are imported, and each imported
 // execution keeps its original machine and run ID so repeating the import is
@@ -29,6 +34,13 @@ func importBundle(controller *Controller, bundle *MigrationBundle, mapping *Migr
 
 	runs := append([]LegacyRun(nil), bundle.Runs...)
 	sort.SliceStable(runs, func(i, j int) bool { return runs[i].RequestedAt.Before(runs[j].RequestedAt) })
+
+	// Imported executions are terminal, so they compete with the controller's
+	// own history for the terminal cap. Appending past the cap would prune the
+	// oldest entries and their logs, which would both lose history and make a
+	// repeated import non-idempotent, so refuse with an actionable number.
+	pending := make([]*Execution, 0, len(runs))
+	logSources := map[string]string{}
 
 	for _, run := range runs {
 		if !isTerminal(run.Status) {
@@ -64,29 +76,59 @@ func importBundle(controller *Controller, bundle *MigrationBundle, mapping *Migr
 		if note != "" {
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("%s: %s", run.ID, note))
 		}
-		if !apply {
-			report.Imported++
-			continue
-		}
-		if err := controller.store.mutate(func(st *controllerStateData) error {
-			st.Executions = append(st.Executions, execution.clone())
-			return nil
-		}); err != nil {
-			return report, err
-		}
+		pending = append(pending, execution)
 		if imported {
-			source := filepath.Join(bundleDir, bundleLogDir, filepath.Base(run.ID)+".log")
-			target := executionLogPath(logDir, execution.ID)
-			if err := copyFile(source, target); err != nil {
-				report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("%s: copy log failed: %v", run.ID, err))
-			}
+			logSources[execution.ID] = filepath.Join(bundleDir, bundleLogDir, filepath.Base(run.ID)+".log")
 		}
 		report.Imported++
 	}
+
+	if err := checkHistoryHeadroom(controller, len(pending), &report); err != nil {
+		return report, err
+	}
 	if !apply {
 		report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("dry run: would import %d executions, skip %d, leave %d already imported", report.Imported, report.Skipped, report.Existing))
+		return report, nil
+	}
+
+	// One mutation keeps the import atomic: either the whole batch lands or
+	// the controller state is untouched.
+	if err := controller.store.mutate(func(st *controllerStateData) error {
+		for _, execution := range pending {
+			st.Executions = append(st.Executions, execution.clone())
+		}
+		return nil
+	}); err != nil {
+		return report, err
+	}
+	for id, source := range logSources {
+		if err := copyFile(source, executionLogPath(logDir, id)); err != nil {
+			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("%s: copy log failed: %v", id, err))
+		}
 	}
 	return report, nil
+}
+
+// checkHistoryHeadroom refuses an import the terminal history cap cannot hold.
+func checkHistoryHeadroom(controller *Controller, incoming int, report *importReport) error {
+	if incoming == 0 {
+		return nil
+	}
+	maxHistory := normalizeMaxHistory(controller.Runtime().MaxHistory)
+	terminal := 0
+	for _, execution := range controller.store.Executions() {
+		if isExecutionTerminal(execution.Status) {
+			terminal++
+		}
+	}
+	if terminal+incoming <= maxHistory {
+		return nil
+	}
+	message := fmt.Sprintf(
+		"importing %d executions on top of %d terminal executions would exceed server.max_history=%d; raise it to at least %d and retry",
+		incoming, terminal, maxHistory, terminal+incoming)
+	report.Diagnostics = append(report.Diagnostics, message)
+	return fmt.Errorf("%w: %s", errHistoryCapTooSmall, message)
 }
 
 // buildImportedExecution maps one legacy run onto the new job and parameter

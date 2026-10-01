@@ -189,7 +189,15 @@ func newMigrateImportCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			controller, err := newController(absConfig, cfg, nil)
+			open := newController
+			if !apply {
+				// A dry run must not create state or log directories on the
+				// target controller.
+				open = func(path string, cfg ControllerConfig, _ []string) (*Controller, error) {
+					return newReadOnlyController(path, cfg)
+				}
+			}
+			controller, err := open(absConfig, cfg, nil)
 			if err != nil {
 				return err
 			}

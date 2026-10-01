@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -389,5 +390,110 @@ func TestMigrateCLIDefaultsToDryRun(t *testing.T) {
 	}
 	if _, err := os.Stat(runtime.StatePath); err != nil {
 		t.Fatalf("--apply must write the controller state: %v", err)
+	}
+}
+
+// TestImportRefusesToExceedTheHistoryCap is the regression guard for a silent
+// data loss: imported executions are terminal, so appending past the cap would
+// prune the controller's own oldest runs and their logs, and would also make a
+// repeated import non-idempotent because the pruned entries are re-imported.
+func TestImportRefusesToExceedTheHistoryCap(t *testing.T) {
+	fixture := newLegacyFixture(t, "linux", "android", []string{"alpha", "beta"}, nil)
+	bundleDir := filepath.Join(t.TempDir(), "bundle")
+	bundle, _, err := exportLegacyBundle("linux", fixture.ConfigPath, bundleDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, _ := planMigration(bundle, "linux-android", "/home/someone/git/dooroo")
+	cfg, _, err := buildRoleConfigs([]*MigrationBundle{bundle}, []*MigrationMapping{mapping})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Server.MaxHistory = 1
+	document, err := marshalControllerConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := newTestController(t, string(document))
+
+	report, err := importBundle(controller, bundle, mapping, bundleDir, true)
+	if !errors.Is(err, errHistoryCapTooSmall) {
+		t.Fatalf("expected the import to be refused, got %v", err)
+	}
+	if !containsSubstring(report.Diagnostics, "raise it to at least 2") {
+		t.Fatalf("the refusal must name the value to raise the cap to, got %v", report.Diagnostics)
+	}
+	if len(controller.store.Executions()) != 0 {
+		t.Fatal("a refused import must not write anything")
+	}
+	// A dry run reports the same problem before anything is attempted.
+	if _, err := importBundle(controller, bundle, mapping, bundleDir, false); !errors.Is(err, errHistoryCapTooSmall) {
+		t.Fatalf("a dry run must report the cap problem, got %v", err)
+	}
+}
+
+// TestImportIsAtomic proves a batch either lands completely or not at all.
+func TestImportIsAtomic(t *testing.T) {
+	scenario := newMigrationScenario(t, nil)
+	var sequenceBefore uint64
+	scenario.controller.store.read(func(st *controllerStateData) { sequenceBefore = st.Sequence })
+
+	if _, err := importBundle(scenario.controller, scenario.bundle, scenario.mapping, scenario.bundleDir, true); err != nil {
+		t.Fatal(err)
+	}
+	var sequenceAfter uint64
+	scenario.controller.store.read(func(st *controllerStateData) { sequenceAfter = st.Sequence })
+	if sequenceAfter != sequenceBefore+1 {
+		t.Fatalf("expected one state mutation for the whole batch, sequence went %d -> %d", sequenceBefore, sequenceAfter)
+	}
+	if len(scenario.controller.store.Executions()) != 2 {
+		t.Fatalf("expected both executions, got %d", len(scenario.controller.store.Executions()))
+	}
+}
+
+// TestDryRunImportLeavesTheTargetUntouched proves a dry run does not even
+// create the controller's state directories.
+func TestDryRunImportLeavesTheTargetUntouched(t *testing.T) {
+	fixture := newLegacyFixture(t, "linux", "android", []string{"alpha"}, nil)
+	bundleDir := filepath.Join(t.TempDir(), "bundle")
+	bundle, _, err := exportLegacyBundle("linux", fixture.ConfigPath, bundleDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, _ := planMigration(bundle, "linux-android", "/home/someone/git/dooroo")
+	cfg, _, err := buildRoleConfigs([]*MigrationBundle{bundle}, []*MigrationMapping{mapping})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := marshalControllerConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, controllerConfigName)
+	if err := os.WriteFile(configPath, document, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadControllerConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := newReadOnlyController(configPath, loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+
+	report, err := importBundle(controller, bundle, mapping, bundleDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Imported != 1 {
+		t.Fatalf("expected the dry run to report one importable run, got %+v", report)
+	}
+	for _, path := range []string{controller.Runtime().StateDir, controller.Runtime().LogDir, controller.Runtime().StatePath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("a dry run must not create %s (stat error %v)", path, err)
+		}
 	}
 }

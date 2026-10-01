@@ -13,7 +13,7 @@ server:
   # Maximum completed run records to keep.
   max_history: 5000
 
-  # Password for the Web UI config editor; empty disables it.
+  # Password for the HTTP config editor at /api/config; empty disables it.
   config_password: ""
 
   # Shell header prepended to each task script.

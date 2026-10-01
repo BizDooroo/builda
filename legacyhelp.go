@@ -52,7 +52,7 @@ Complete config.yaml example:
     script_header: |
       #!/usr/bin/env bash
 
-    # Set this to enable and protect the Web UI config editor.
+    # Set this to enable and protect the HTTP config editor at /api/config.
     # config_password: "change-me"
 
   tasks:
@@ -104,10 +104,9 @@ Field reference:
     Defaults to 5000. Queued and running runs are always retained.
 
   server.config_password
-    Optional password for the Web UI config editor and /api/config. When
-    omitted or empty, the home page hides the config button and the HTTP
-    config editor is disabled. CLI config get/set does not require this
-    password.
+    Optional password for /api/config. When omitted or empty, HTTP config
+    editing is disabled. The standalone role serves no Web UI, so this key
+    only affects the API. CLI config get/set does not require this password.
 
   server.script_header
     Optional Bash script header prepended to every task script. Defaults to

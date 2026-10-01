@@ -9,10 +9,11 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Service control plans. Each platform action is expressed as an ordered list
-// of commands so the order, the flags, and the error handling are testable
+// of steps so the order, the flags, and the error handling are testable
 // without a live init system.
 //
 // launchd notes, verified against a real LaunchAgent:
@@ -20,12 +21,65 @@ import (
 //     bootstrap with `kickstart -k` kills that instance and starts a second
 //     one while the first still holds its listening socket, which produces a
 //     "bind: address already in use" crash loop paced by the KeepAlive
-//     throttle. Install and start therefore never use `-k`.
+//     throttle. No plan here ever uses `-k`.
+//   - `bootout` only signals the job; it returns before the job is gone, and
+//     the plist's ExitTimeOut bounds how long that takes. A plan that loads
+//     immediately afterwards can hit "Operation already in progress", so every
+//     teardown is followed by a probe that waits for the job to disappear.
 //   - `enable` writes a persistent per-user override and must run before
 //     `bootstrap`, otherwise a previously disabled label loads but is never
 //     allowed to run.
-//   - `bootout` on a label that is not loaded is a successful no-op for our
-//     purposes, and `bootstrap` on a label that is already loaded is too.
+//   - Loading is verified: the probe after `bootstrap` requires the loaded job
+//     to reference the plist this install just wrote, so a swallowed error can
+//     never be reported as a successful install.
+const (
+	launchdUnloadDeadline = 35 * time.Second
+	launchdLoadDeadline   = 10 * time.Second
+	systemdStartDeadline  = 10 * time.Second
+)
+
+// launchdTeardown stops a job and waits for launchd to finish unloading it.
+func launchdTeardown(name string) []serviceCommand {
+	target := launchdServiceTarget(name)
+	return []serviceCommand{
+		{Name: "launchctl", Args: []string{"bootout", target}, IgnoreMissing: true, IgnoreBusy: true},
+		{
+			Name:          "launchctl",
+			Args:          []string{"print", target},
+			Probe:         true,
+			ExpectSuccess: false,
+			Deadline:      launchdUnloadDeadline,
+			Describe:      "waiting for launchd to unload " + target,
+			Hint:          "the previous job is still shutting down; stop it with \"launchctl bootout " + target + "\" and retry",
+		},
+	}
+}
+
+// launchdLoad enables, loads, and then proves the loaded job is the one at
+// plistPath.
+func launchdLoad(name, plistPath string, tolerateLoaded bool) []serviceCommand {
+	target := launchdServiceTarget(name)
+	return []serviceCommand{
+		{Name: "launchctl", Args: []string{"enable", target}, IgnoreMissing: true},
+		{
+			Name:         "launchctl",
+			Args:         []string{"bootstrap", launchdDomain(), plistPath},
+			IgnoreLoaded: tolerateLoaded,
+			Hint:         launchdDomainHint(),
+		},
+		{
+			Name:          "launchctl",
+			Args:          []string{"print", target},
+			Probe:         true,
+			ExpectSuccess: true,
+			ExpectOutput:  plistPath,
+			Deadline:      launchdLoadDeadline,
+			Describe:      "waiting for launchd to load " + plistPath,
+			Hint:          launchdDomainHint(),
+		},
+	}
+}
+
 func serviceEnablePlan(spec serviceSpec, path string, start bool) ([]serviceCommand, error) {
 	switch spec.TargetOS {
 	case "linux":
@@ -38,23 +92,23 @@ func serviceEnablePlan(spec serviceSpec, path string, start bool) ([]serviceComm
 			args = append(args, "--now")
 		}
 		args = append(args, spec.Name+".service")
-		return append(commands, serviceCommand{Name: "systemctl", Args: args, Hint: linuxUserServiceHint}), nil
+		commands = append(commands, serviceCommand{Name: "systemctl", Args: args, Hint: linuxUserServiceHint})
+		if start {
+			commands = append(commands, systemdActiveProbe(spec.Name))
+		}
+		return commands, nil
 	case "darwin":
-		target := launchdServiceTarget(spec.Name)
-		commands := []serviceCommand{
-			{Name: "launchctl", Args: []string{"bootout", target}, IgnoreMissing: true},
-			{Name: "launchctl", Args: []string{"enable", target}, IgnoreMissing: true},
-		}
+		commands := launchdTeardown(spec.Name)
 		if !start {
-			return commands, nil
+			// The plist is written and the override cleared, but nothing is
+			// loaded, so there is nothing to verify.
+			return append(commands, serviceCommand{
+				Name: "launchctl", Args: []string{"enable", launchdServiceTarget(spec.Name)}, IgnoreMissing: true,
+			}), nil
 		}
-		// RunAtLoad starts the job exactly once here. No kickstart follows.
-		return append(commands, serviceCommand{
-			Name:         "launchctl",
-			Args:         []string{"bootstrap", launchdDomain(), path},
-			IgnoreLoaded: true,
-			Hint:         launchdDomainHint(),
-		}), nil
+		// The teardown probe proved the label is unloaded, so a bootstrap that
+		// reports "already loaded" here is a genuine surprise and must fail.
+		return append(commands, launchdLoad(spec.Name, path, false)...), nil
 	default:
 		return nil, fmt.Errorf("service install is not supported on %s", spec.TargetOS)
 	}
@@ -68,11 +122,21 @@ func serviceDisablePlan(targetOS, name, path string) ([]serviceCommand, error) {
 			{Name: "systemctl", Args: []string{"--user", "daemon-reload"}},
 		}, nil
 	case "darwin":
-		return []serviceCommand{
-			{Name: "launchctl", Args: []string{"bootout", launchdServiceTarget(name)}, IgnoreMissing: true},
-		}, nil
+		return launchdTeardown(name), nil
 	default:
 		return nil, fmt.Errorf("service uninstall is not supported on %s", targetOS)
+	}
+}
+
+func systemdActiveProbe(name string) serviceCommand {
+	return serviceCommand{
+		Name:          "systemctl",
+		Args:          []string{"--user", "is-active", name + ".service"},
+		Probe:         true,
+		ExpectSuccess: true,
+		Deadline:      systemdStartDeadline,
+		Describe:      "waiting for " + name + ".service to become active",
+		Hint:          linuxUserServiceHint,
 	}
 }
 
@@ -80,36 +144,49 @@ func serviceControlCommands(targetOS, name, path, action string) ([]serviceComma
 	switch targetOS {
 	case "linux":
 		switch action {
-		case "start", "stop", "restart", "status":
+		case "start", "restart":
+			return []serviceCommand{
+				{Name: "systemctl", Args: []string{"--user", action, name + ".service"}, Hint: linuxUserServiceHint},
+				systemdActiveProbe(name),
+			}, nil
+		case "stop":
+			return []serviceCommand{{Name: "systemctl", Args: []string{"--user", "stop", name + ".service"}, Hint: linuxUserServiceHint}}, nil
+		case "status":
+			// A stopped unit exits non-zero; that is the answer, not a failure.
 			return []serviceCommand{{
 				Name:         "systemctl",
-				Args:         []string{"--user", action, name + ".service"},
-				StreamOutput: action == "status",
-				Hint:         linuxUserServiceHint,
+				Args:         []string{"--user", "status", name + ".service"},
+				StreamOutput: true,
+				IgnoreError:  true,
 			}}, nil
 		default:
 			return nil, fmt.Errorf("unknown service action %q", action)
 		}
 	case "darwin":
-		domain := launchdDomain()
 		target := launchdServiceTarget(name)
-		// Clearing a persistent override and loading the job are idempotent
-		// preconditions shared by start and restart.
-		load := []serviceCommand{
-			{Name: "launchctl", Args: []string{"enable", target}, IgnoreMissing: true},
-			{Name: "launchctl", Args: []string{"bootstrap", domain, path}, IgnoreLoaded: true, Hint: launchdDomainHint()},
-		}
 		switch action {
 		case "start":
-			// kickstart without -k starts a loaded job and is a no-op when it
-			// is already running, so repeated starts never restart the job.
-			return append(load, serviceCommand{Name: "launchctl", Args: []string{"kickstart", target}, Hint: launchdDomainHint()}), nil
+			// The job is usually already loaded, so tolerate that and use
+			// kickstart without -k, which starts a loaded job and is a no-op
+			// when it is already running. The probe proves the end state.
+			plan := launchdLoad(name, path, true)
+			return append(plan[:len(plan)-1],
+				serviceCommand{Name: "launchctl", Args: []string{"kickstart", target}, Hint: launchdDomainHint()},
+				plan[len(plan)-1],
+			), nil
 		case "restart":
-			return append(load, serviceCommand{Name: "launchctl", Args: []string{"kickstart", "-k", target}, Hint: launchdDomainHint()}), nil
+			// A verified unload followed by a verified load. Never a bootstrap
+			// followed by a kill, which would start the job twice.
+			return append(launchdTeardown(name), launchdLoad(name, path, false)...), nil
 		case "stop":
-			return []serviceCommand{{Name: "launchctl", Args: []string{"bootout", target}, IgnoreMissing: true}}, nil
+			return launchdTeardown(name), nil
 		case "status":
-			return []serviceCommand{{Name: "launchctl", Args: []string{"print", target}, StreamOutput: true, Hint: launchdDomainHint()}}, nil
+			return []serviceCommand{{
+				Name:         "launchctl",
+				Args:         []string{"print", target},
+				StreamOutput: true,
+				IgnoreError:  true,
+			}}, nil
 		default:
 			return nil, fmt.Errorf("unknown service action %q", action)
 		}
@@ -130,6 +207,12 @@ func launchdDomainHint() string {
 // step and attaching actionable hints to real failures.
 func runServiceCommands(out io.Writer, commands []serviceCommand) error {
 	for _, command := range commands {
+		if command.Probe {
+			if err := runServiceProbe(command); err != nil {
+				return decorateServiceError(command, err)
+			}
+			continue
+		}
 		output, err := executeServiceCommand(out, command)
 		if err == nil {
 			continue
@@ -140,12 +223,48 @@ func runServiceCommands(out io.Writer, commands []serviceCommand) error {
 		if command.IgnoreMissing && launchctlReportsMissing(output) {
 			continue
 		}
+		if command.IgnoreBusy && launchctlReportsInProgress(output) {
+			continue
+		}
 		if command.IgnoreLoaded && launchctlReportsAlreadyLoaded(output) {
 			continue
 		}
 		return decorateServiceError(command, err)
 	}
 	return nil
+}
+
+// runServiceProbe polls one command until the state it asserts holds.
+func runServiceProbe(command serviceCommand) error {
+	deadline := command.Deadline
+	if deadline <= 0 {
+		deadline = launchdLoadDeadline
+	}
+	stop := time.Now().Add(deadline)
+	var lastOutput string
+	for {
+		output, err := runCommandCapture(command.Name, command.Args...)
+		lastOutput = output
+		succeeded := err == nil
+		if succeeded == command.ExpectSuccess {
+			if !command.ExpectSuccess || command.ExpectOutput == "" || strings.Contains(output, command.ExpectOutput) {
+				return nil
+			}
+		}
+		if !time.Now().Before(stop) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	describe := command.Describe
+	if describe == "" {
+		describe = command.Name + " " + strings.Join(command.Args, " ")
+	}
+	if command.ExpectSuccess && command.ExpectOutput != "" {
+		return fmt.Errorf("%s timed out after %s; the loaded job does not reference %q: %s",
+			describe, deadline, command.ExpectOutput, strings.TrimSpace(lastOutput))
+	}
+	return fmt.Errorf("%s timed out after %s: %s", describe, deadline, strings.TrimSpace(lastOutput))
 }
 
 func executeServiceCommand(out io.Writer, command serviceCommand) (string, error) {
@@ -163,7 +282,9 @@ func decorateServiceError(command serviceCommand, err error) error {
 }
 
 // launchctlReportsMissing matches the launchd responses that mean "the thing
-// you asked me to remove is already gone".
+// you asked me to remove is already gone". A permission or System Integrity
+// refusal is deliberately absent: swallowing it would report a successful
+// install while launchd keeps running the previously loaded job.
 func launchctlReportsMissing(message string) bool {
 	lowered := strings.ToLower(message)
 	for _, needle := range []string{
@@ -171,13 +292,20 @@ func launchctlReportsMissing(message string) bool {
 		"could not find service",
 		"not find specified service",
 		"no such file or directory",
-		"operation not permitted while System Integrity", // never retried
 	} {
 		if strings.Contains(lowered, needle) {
 			return true
 		}
 	}
 	return strings.Contains(lowered, "boot-out failed: 3:")
+}
+
+// launchctlReportsInProgress matches a teardown that launchd has accepted but
+// not finished. The probe that follows such a step proves the outcome.
+func launchctlReportsInProgress(message string) bool {
+	lowered := strings.ToLower(message)
+	return strings.Contains(lowered, "operation now in progress") ||
+		strings.Contains(lowered, "boot-out failed: 36")
 }
 
 // launchctlReportsAlreadyLoaded matches the launchd responses that mean "this

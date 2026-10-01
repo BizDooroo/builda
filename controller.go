@@ -41,6 +41,16 @@ type agentLiveness struct {
 }
 
 func newController(configPath string, cfg ControllerConfig, listenOverride []string) (*Controller, error) {
+	return openController(configPath, cfg, listenOverride, true)
+}
+
+// newReadOnlyController opens a controller for inspection without creating its
+// state directories, so a dry run leaves the target host untouched.
+func newReadOnlyController(configPath string, cfg ControllerConfig) (*Controller, error) {
+	return openController(configPath, cfg, nil, false)
+}
+
+func openController(configPath string, cfg ControllerConfig, listenOverride []string, create bool) (*Controller, error) {
 	runtime, err := controllerRuntime(configPath, cfg)
 	if err != nil {
 		return nil, err
@@ -48,10 +58,12 @@ func newController(configPath string, cfg ControllerConfig, listenOverride []str
 	if len(listenOverride) > 0 {
 		runtime.ListenAddresses = normalizeListenAddresses(listenOverride)
 	}
-	if err := os.MkdirAll(runtime.StateDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create state dir: %w", err)
+	if create {
+		if err := os.MkdirAll(runtime.StateDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create state dir: %w", err)
+		}
 	}
-	store, err := newControllerStore(runtime.StatePath, runtime.LogDir, runtime.MaxHistory)
+	store, err := openControllerStore(runtime.StatePath, runtime.LogDir, runtime.MaxHistory, create)
 	if err != nil {
 		return nil, err
 	}

@@ -53,7 +53,9 @@ func renderSystemdUnit(spec serviceSpec) string {
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=Builda " + serviceDescriptionRole(spec.Role) + "\n")
-	b.WriteString("After=network-online.target\n\n")
+	// network-online.target does not exist in the user manager, so ordering
+	// against it would be silently ignored.
+	b.WriteString("After=default.target\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
 	b.WriteString("ExecStart=")
@@ -95,8 +97,7 @@ func renderLaunchdPlist(spec serviceSpec) (string, error) {
 	b.WriteString("  </dict>\n")
 	writePlistTrue(&b, "RunAtLoad")
 	writePlistTrue(&b, "KeepAlive")
-	// Background keeps the agent out of foreground scheduling and App Nap.
-	writePlistString(&b, "ProcessType", "Background")
+	writePlistString(&b, "ProcessType", servicePlistProcessType(spec.Role))
 	// Aqua pins the agent to the desktop login session, which is the only
 	// session type that can reach the login keychain used by code signing,
 	// and prevents a second copy loading into another session type.
@@ -201,6 +202,17 @@ func serviceLogDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, "Library", "Logs", "builda"), nil
+}
+
+// servicePlistProcessType picks the launchd scheduling tier. Background puts a
+// job on a throttled CPU and I/O tier, and an agent's children inherit it, so
+// a build agent uses Adaptive instead; a controller only serves HTTP and is
+// genuinely a background job.
+func servicePlistProcessType(role string) string {
+	if role == RoleAgent {
+		return "Adaptive"
+	}
+	return "Background"
 }
 
 func serviceDescriptionRole(role string) string {

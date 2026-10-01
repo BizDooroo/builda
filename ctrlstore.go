@@ -32,8 +32,16 @@ type ControllerStore struct {
 }
 
 func newControllerStore(statePath, logDir string, maxHistory int) (*ControllerStore, error) {
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
-		return nil, err
+	return openControllerStore(statePath, logDir, maxHistory, true)
+}
+
+// openControllerStore loads the snapshot. With create set it also prepares the
+// log directory; an inspection-only caller leaves the filesystem alone.
+func openControllerStore(statePath, logDir string, maxHistory int, create bool) (*ControllerStore, error) {
+	if create {
+		if err := os.MkdirAll(logDir, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	store := &ControllerStore{
 		statePath:  statePath,

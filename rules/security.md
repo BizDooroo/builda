@@ -1,7 +1,7 @@
 # Security Rules
 
 - Builda is internal-only software for a private network. Treat every deployment as trusted-private-network only, and state in any exposure documentation that the project is not hardened.
-- Job scripts and the agent `script_header` are privileged shell execution on the agent host. Only admin-configured jobs run; never add an endpoint that accepts a script from a request body, query string, or header.
+- Job scripts and the agent `script_header` are privileged shell execution on the agent host. Only admin-configured jobs run: a run request may name a configured job and set its declared parameters, and must never accept a script from a request body, query string, or header. Writing a script stays limited to the authenticated admin job and config endpoints.
 - The Web UI and every controller API, including run logs, require authentication. There must be no unauthenticated job, config, or log surface. Only the login page, the login call, and static page assets may be anonymous.
 - The admin credential is created locally with `builda controller admin set-password` before anyone can sign in from outside. Store it as a salted PBKDF2-HMAC-SHA256 verifier and rate limit failed logins per client.
 - Browser sessions use an HttpOnly, SameSite cookie, marked Secure over HTTPS. Require a CSRF token and a same-origin check on every browser state change. Bearer-token callers do not use CSRF.

@@ -28,7 +28,7 @@ Quick start
 
 Migration from the legacy standalone server
 
-  builda migrate export --config <legacy config> --out-dir bundle
+  builda migrate export --machine linux --config <legacy config> --out-dir bundle
   builda migrate plan --bundle bundle --out mapping.yaml
   builda migrate config --bundle bundle --map mapping.yaml --out-dir new
   builda migrate import --bundle bundle --map mapping.yaml --config controller.yaml

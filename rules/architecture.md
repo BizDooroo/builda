@@ -19,6 +19,7 @@
 - Agent liveness is in-memory only. After a controller restart every agent is offline until it polls, so nothing is scheduled on a stale view.
 
 ## State and lifecycle
+- Importing history competes with live runs for the terminal history cap. Refuse an import the cap cannot hold, with the number to raise it to, rather than pruning the controller's own history.
 - Persist run and assignment state in one JSON snapshot, written atomically with mode `0600`. Apply every mutation to a clone and commit only after the write succeeds, so a persistence failure never acknowledges an enqueue, assignment, or start.
 - States are `QUEUED`, `ASSIGNED`, `RUNNING`, `CANCELING`, and the terminal `SUCCESS`, `FAILED`, `CANCELED`, `ABORTED`. Bound terminal history with `server.max_history`, defaulting to 5000, and never prune a queued or active execution.
 - An agent journals an accepted assignment durably before acting, then obtains a start permit. Serialize granting the permit against cancellation so a duplicate message cannot start a second process.

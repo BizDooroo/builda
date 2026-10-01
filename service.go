@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -15,13 +16,14 @@ const (
 )
 
 type serviceOptions struct {
-	name       string
-	role       string
-	binaryPath string
-	start      bool
-	force      bool
-	dryRun     bool
-	targetOS   string
+	name           string
+	role           string
+	explicitConfig bool
+	binaryPath     string
+	start          bool
+	force          bool
+	dryRun         bool
+	targetOS       string
 }
 
 type serviceSpec struct {
@@ -40,7 +42,9 @@ type serviceArtifact struct {
 
 // serviceCommand is one step of a platform service plan. The ignore flags
 // encode the idempotence rules of the underlying tool so repeating an install,
-// a start, or a stop is always safe.
+// a start, or a stop is always safe. A probe step polls until the state it
+// asserts is true, which is how a plan waits for an asynchronous teardown and
+// how it proves the job it loaded is the one it just wrote.
 type serviceCommand struct {
 	Name          string
 	Args          []string
@@ -48,7 +52,14 @@ type serviceCommand struct {
 	IgnoreError   bool
 	IgnoreMissing bool
 	IgnoreLoaded  bool
+	IgnoreBusy    bool
 	Hint          string
+
+	Probe         bool
+	ExpectSuccess bool
+	ExpectOutput  string
+	Deadline      time.Duration
+	Describe      string
 }
 
 func newServiceCommand(serveOpts *serveOptions) *cobra.Command {
@@ -91,6 +102,7 @@ Builda is internal-only software; do not bind it to untrusted networks.`),
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.explicitConfig = flagChanged(cmd, "config")
 			return runServiceInstall(cmd, serveOpts, opts)
 		},
 	}
@@ -118,7 +130,7 @@ Builda is internal-only software; do not bind it to untrusted networks.`),
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := buildServiceSpec(serveOpts, opts, false)
+			spec, err := buildServiceSpec(serveOpts, opts)
 			if err != nil {
 				return err
 			}
@@ -214,7 +226,7 @@ func newServiceDiagnoseCommand(serveOpts *serveOptions, opts *serviceOptions) *c
 }
 
 func runServiceDiagnose(cmd *cobra.Command, serveOpts *serveOptions, opts *serviceOptions) error {
-	spec, err := buildServiceSpec(serveOpts, opts, false)
+	spec, err := buildServiceSpec(serveOpts, opts)
 	if err != nil {
 		return err
 	}

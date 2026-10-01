@@ -11,7 +11,7 @@ A single binary provides both roles plus the migration tooling. The Web UI is em
 
 > DISCLAIMER: Builda is an internal tool for a private, trusted network. It is not a hardened product, and security issues are expected to exist across the implementation. Do not expose it to the public internet.
 
-The controller requires authentication on the Web UI and on every API, including run logs. There is no unauthenticated job, config, or log surface, and there is no endpoint that accepts a script from a request: only admin-configured jobs run.
+The controller requires authentication on the Web UI and on every API, including run logs. There is no unauthenticated job, config, or log surface. A run request can only name a configured job and set its declared parameters; no run endpoint accepts a script. Scripts are written by an authenticated admin through the job and config endpoints, which is what configuring a job means.
 
 What is implemented:
 
