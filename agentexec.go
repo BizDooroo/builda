@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,6 +128,12 @@ func (a *Agent) runExecution(ctx context.Context, entry *journalEntry, cancel <-
 		return agentFailure(err)
 	}
 	if err := cmd.Start(); err != nil {
+		// The process never launched, so record that rather than leaving an
+		// entry a crash here would have to treat as unprovable.
+		entry.Phase = journalPermitted
+		if saveErr := a.journal.Save(entry); saveErr != nil {
+			log.Printf("journal failed start for %s: %v", entry.ExecutionID, saveErr)
+		}
 		writeLog(writer, "error", err.Error())
 		_ = logFile.Sync()
 		return agentFailure(err)
@@ -135,6 +142,11 @@ func (a *Agent) runExecution(ctx context.Context, entry *journalEntry, cancel <-
 	entry.PGID = cmd.Process.Pid
 	if token, tokenErr := processStartToken(cmd.Process.Pid); tokenErr == nil {
 		entry.ProcessToken = token
+	} else {
+		// Without an identity the group cannot be proven ours later, so say so
+		// explicitly instead of letting it look like a recycled pid.
+		entry.ProcessTokenError = tokenErr.Error()
+		log.Printf("could not record a process identity for %s: %v", entry.ExecutionID, tokenErr)
 	}
 	if err := a.journal.Save(entry); err != nil {
 		_ = killProcessGroup(entry.PGID, syscall.SIGKILL)

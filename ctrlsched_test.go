@@ -245,3 +245,57 @@ func TestOfflineAfterBoundary(t *testing.T) {
 		t.Fatal("an agent must go offline after the configured window")
 	}
 }
+
+// TestConcurrentSchedulingNeverDoubleAssignsAnAgent is the regression guard
+// for a non-transactional occupancy check. Two schedulers that both captured
+// their agent view before the first assignment committed would each hand the
+// same agent an execution; the agent only ever runs the first, so the second
+// would leave the queue without ever being runnable.
+func TestConcurrentSchedulingNeverDoubleAssignsAnAgent(t *testing.T) {
+	controller := newTestController(t, testControllerConfig)
+	markOnline(controller, "linux-one")
+
+	first := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	second := enqueue(t, controller, "android-build", map[string]string{"project": "beta"})
+
+	// Hammer the scheduler from several goroutines, which is what an enqueue
+	// racing the scheduler loop looks like.
+	done := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() { done <- controller.scheduleOnce() }()
+	}
+	for i := 0; i < 8; i++ {
+		if err := <-done; err != nil {
+			t.Fatalf("schedule: %v", err)
+		}
+	}
+
+	assignedTo := map[string][]string{}
+	queued := 0
+	for _, execution := range controller.store.Executions() {
+		switch execution.Status {
+		case StatusAssigned, StatusRunning:
+			assignedTo[execution.AgentID] = append(assignedTo[execution.AgentID], execution.ID)
+		case StatusQueued:
+			queued++
+		}
+	}
+	for agent, executions := range assignedTo {
+		if len(executions) > 1 {
+			t.Fatalf("agent %s holds %d executions at once: %v", agent, len(executions), executions)
+		}
+	}
+	if queued != 1 {
+		t.Fatalf("exactly one execution should still be queued, got %d", queued)
+	}
+	// And the one that was assigned is the earliest of the two.
+	if _, ok := assignedTo["linux-one"]; !ok {
+		t.Fatal("the free agent should have taken work")
+	}
+	if assignedTo["linux-one"][0] != first.ID {
+		t.Fatalf("expected the earliest execution to be assigned, got %s", assignedTo["linux-one"][0])
+	}
+	if statusOf(t, controller, second.ID) != StatusQueued {
+		t.Fatal("the later execution must stay queued and visible")
+	}
+}

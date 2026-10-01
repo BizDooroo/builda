@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"syscall"
@@ -111,7 +112,10 @@ func (a *Agent) setAckedOffset(id string, offset int64) {
 }
 
 // completeExecution retains the local log and result until the controller has
-// acknowledged every byte and accepted the final status.
+// acknowledged every byte and accepted the final status. A transient failure
+// is retried indefinitely, because the result is the only record of what
+// happened. A refusal that retrying cannot fix is escalated instead, so the
+// agent never spins on it and never silently drops the run.
 func (a *Agent) completeExecution(ctx context.Context, entry *journalEntry) {
 	a.setState(agentStateUploading)
 	for {
@@ -119,6 +123,10 @@ func (a *Agent) completeExecution(ctx context.Context, entry *journalEntry) {
 			return
 		}
 		if _, err := a.flushLog(ctx, entry.ExecutionID); err != nil {
+			if isPermanentAgentError(err) {
+				a.abandonExecution(ctx, entry, "the controller refused the log upload", err)
+				return
+			}
 			log.Printf("flush log for %s: %v", entry.ExecutionID, err)
 			if !sleepContext(ctx, resultRetryDelay) {
 				return
@@ -134,6 +142,10 @@ func (a *Agent) completeExecution(ctx context.Context, entry *journalEntry) {
 			LogLength:     entry.LogLength,
 		})
 		if err != nil {
+			if isPermanentAgentError(err) {
+				a.abandonExecution(ctx, entry, "the controller refused the result", err)
+				return
+			}
 			log.Printf("submit result for %s: %v", entry.ExecutionID, err)
 			if !sleepContext(ctx, resultRetryDelay) {
 				return
@@ -159,6 +171,26 @@ func (a *Agent) completeExecution(ctx context.Context, entry *journalEntry) {
 		log.Printf("remove spool for %s: %v", entry.ExecutionID, err)
 	}
 	a.setState(agentStateIdle)
+}
+
+// abandonExecution stops reporting an execution the controller will never
+// accept. The outcome is still on disk, so the spool is kept and the agent
+// blocks for an operator rather than looping or pretending the run is done.
+func (a *Agent) abandonExecution(ctx context.Context, entry *journalEntry, reason string, cause error) {
+	details := fmt.Sprintf("%s: %v; the result stays in the agent spool at %s",
+		reason, cause, a.journal.entryDir(entry.ExecutionID))
+	log.Printf("execution %s needs attention: %s", entry.ExecutionID, details)
+	entry.Phase = journalBlocked
+	entry.Attention = details
+	if err := a.journal.Save(entry); err != nil {
+		log.Printf("journal blocked execution %s: %v", entry.ExecutionID, err)
+	}
+	// Reporting may itself be refused; the local block stands either way.
+	if err := a.client.ReportAttention(ctx, entry.ExecutionID, details); err != nil {
+		log.Printf("report attention for %s: %v", entry.ExecutionID, err)
+	}
+	a.markBlocked(entry.ExecutionID)
+	a.setState(agentStateBlocked)
 }
 
 // recover reconciles everything a previous agent process left behind. An

@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// Permit retries bound how long a lost response delays a start.
+const (
+	permitAttempts   = 5
+	permitRetryDelay = 2 * time.Second
+)
+
 // Agent runs one job at a time on its host. It owns a durable journal so a
 // restart can never re-execute an incomplete run, and it keeps heartbeats
 // flowing on their own goroutine while a script runs, uploads, or polls.
@@ -60,6 +66,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.waitBlocked(ctx)
 			continue
 		}
+		// Anything the journal still owns is finished before asking for more.
+		// A permit response lost in flight leaves an accepted entry here, and
+		// without this the controller would hold the execution RUNNING while
+		// the agent waited for an assignment it already has.
+		if a.resumePending(ctx) {
+			continue
+		}
 		response, err := a.client.Poll(ctx, a.currentExecution(), a.journal.IDs())
 		if err != nil {
 			if ctx.Err() != nil {
@@ -71,11 +84,46 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		for _, id := range response.CancelRequested {
+			a.requestCancel(id)
+		}
 		if response.Assignment == nil {
+			// A poll that only reported reconciliation would otherwise spin:
+			// the controller answers immediately every time, so wait out one
+			// heartbeat before asking again.
+			if len(response.Unknown) > 0 {
+				sleepContext(ctx, a.runtime.HeartbeatInterval)
+			}
 			continue
 		}
 		a.handleAssignment(ctx, *response.Assignment)
 	}
+}
+
+// resumePending finishes any execution the journal still owns. It reports
+// whether it did work, so the caller can re-evaluate before polling.
+func (a *Agent) resumePending(ctx context.Context) bool {
+	entries, err := a.journal.List()
+	if err != nil {
+		log.Printf("read agent journal: %v", err)
+		return false
+	}
+	for _, entry := range entries {
+		switch entry.Phase {
+		case journalAccepted, journalPermitted:
+			a.runAssignment(ctx, entry)
+			return true
+		case journalFinished:
+			a.completeExecution(ctx, entry)
+			return true
+		case journalReported:
+			if err := a.journal.Remove(entry.ExecutionID); err != nil {
+				log.Printf("remove reported execution %s: %v", entry.ExecutionID, err)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // handleAssignment journals the accepted assignment before anything else, then
@@ -110,7 +158,10 @@ func (a *Agent) runAssignment(ctx context.Context, entry *journalEntry) {
 	defer a.endExecution()
 
 	if entry.Phase != journalPermitted {
-		permit, err := a.client.Permit(ctx, entry.ExecutionID)
+		// The permit is idempotent, so a lost response is retried rather than
+		// abandoned; abandoning it would strand the execution on the
+		// controller with no way to redeliver the assignment.
+		permit, err := a.requestPermit(ctx, entry.ExecutionID)
 		if err != nil {
 			log.Printf("request start permit for %s: %v", entry.ExecutionID, err)
 			return
@@ -166,6 +217,31 @@ func (a *Agent) runAssignment(ctx context.Context, entry *journalEntry) {
 		return
 	}
 	a.completeExecution(ctx, entry)
+}
+
+// requestPermit asks for permission to start, retrying a transport failure.
+// The controller treats a repeat request as idempotent, so the only risk of
+// retrying is delay, while not retrying strands the execution.
+func (a *Agent) requestPermit(ctx context.Context, executionID string) (AgentPermitResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < permitAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return AgentPermitResponse{}, ctx.Err()
+		}
+		permit, err := a.client.Permit(ctx, executionID)
+		if err == nil {
+			return permit, nil
+		}
+		lastErr = err
+		if isPermanentAgentError(err) {
+			return AgentPermitResponse{}, err
+		}
+		log.Printf("retrying start permit for %s: %v", executionID, err)
+		if !sleepContext(ctx, permitRetryDelay) {
+			return AgentPermitResponse{}, ctx.Err()
+		}
+	}
+	return AgentPermitResponse{}, lastErr
 }
 
 // beginExecution installs the cancellation channel for the active execution.

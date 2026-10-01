@@ -178,14 +178,48 @@ func (r *Runner) execute(ctx context.Context, id string) {
 	r.finish(id, canceled, exitCode, errText)
 }
 
+// maxLogLineBytes bounds one rendered log line. A longer line is split across
+// several, which keeps minified bundles and base64 blobs readable.
+const maxLogLineBytes = 64 << 10
+
+// copyPrefixed drains a pipe to EOF, writing one prefixed log line per source
+// line. It must never stop early: whoever stops reading leaves the child
+// blocked on a full pipe buffer, which deadlocks the run. A line longer than
+// maxLogLineBytes is therefore split rather than treated as an error.
 func copyPrefixed(wg *sync.WaitGroup, writer io.Writer, label string, reader io.Reader) {
 	defer wg.Done()
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		writeLog(writer, label, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		writeLog(writer, label, "read error: "+err.Error())
+	buffered := bufio.NewReaderSize(reader, 64<<10)
+	var line []byte
+	for {
+		chunk, isPrefix, err := buffered.ReadLine()
+		if len(chunk) > 0 {
+			line = append(line, chunk...)
+			for len(line) >= maxLogLineBytes {
+				writeLog(writer, label, string(line[:maxLogLineBytes]))
+				line = line[maxLogLineBytes:]
+			}
+		}
+		if isPrefix {
+			continue
+		}
+		if len(line) > 0 || err == nil {
+			writeLog(writer, label, string(line))
+			line = line[:0]
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				writeLog(writer, label, "read error: "+err.Error())
+			}
+			// Keep draining until EOF so the child never blocks on a full
+			// pipe, even after a transient read error.
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if _, drainErr := io.Copy(io.Discard, buffered); drainErr != nil {
+				return
+			}
+			return
+		}
 	}
 }
 

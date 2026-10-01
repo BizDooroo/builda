@@ -41,7 +41,13 @@ func (s *ControllerAPI) handleAgentPoll(w http.ResponseWriter, r *http.Request, 
 		changed := s.controller.store.Subscribe()
 		response.Assignment = s.controller.AssignmentFor(who.AgentID)
 		response.CancelRequested = s.controller.CancelRequestsFor(who.AgentID)
-		if response.Assignment != nil || len(response.CancelRequested) > 0 || len(response.Unknown) > 0 {
+		if response.Assignment != nil || len(response.CancelRequested) > 0 {
+			respondJSON(w, response)
+			return
+		}
+		if len(response.Unknown) > 0 {
+			// Reconciliation is reported, but it is not work, so it must not
+			// short-circuit the long poll into an immediate retry.
 			respondJSON(w, response)
 			return
 		}

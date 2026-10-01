@@ -103,6 +103,20 @@ func verifyOrphan(entry *journalEntry) orphanVerdict {
 		// record the process identity, so nothing can be proven about it.
 		return orphanVerdict{Ended: false, Owned: false, Details: "the agent crashed between launching the script and recording its process identity"}
 	}
+	if entry.ProcessToken == "" {
+		// The identity was never recorded, so ownership cannot be proven
+		// either way. Report that rather than guessing.
+		groupExists, groupErr := processGroupExists(entry.PGID)
+		if !groupExists && groupErr == nil {
+			return orphanVerdict{Ended: true, Owned: true, Details: "no process identity was recorded, and process group " + strconv.Itoa(entry.PGID) + " no longer exists"}
+		}
+		details := "no process identity was recorded for pid " + strconv.Itoa(entry.PID) + ", so this process group cannot be proven to belong to this execution"
+		if entry.ProcessTokenError != "" {
+			details += ": " + entry.ProcessTokenError
+		}
+		return orphanVerdict{Ended: false, Owned: false, Details: details}
+	}
+
 	token, tokenErr := processStartToken(entry.PID)
 	groupExists, groupErr := processGroupExists(entry.PGID)
 

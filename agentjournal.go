@@ -23,23 +23,24 @@ const (
 // before the assignment is acknowledged and updated at every transition, so an
 // agent restart can never re-execute an incomplete run.
 type journalEntry struct {
-	ExecutionID   string          `json:"execution_id"`
-	Phase         string          `json:"phase"`
-	Assignment    AgentAssignment `json:"assignment"`
-	AcceptedAt    time.Time       `json:"accepted_at"`
-	PermittedAt   time.Time       `json:"permitted_at,omitempty"`
-	StartedAt     time.Time       `json:"started_at,omitempty"`
-	FinishedAt    time.Time       `json:"finished_at,omitempty"`
-	PID           int             `json:"pid,omitempty"`
-	PGID          int             `json:"pgid,omitempty"`
-	ProcessToken  string          `json:"process_token,omitempty"`
-	Status        string          `json:"status,omitempty"`
-	ExitCode      int             `json:"exit_code"`
-	Error         string          `json:"error,omitempty"`
-	FailureReason string          `json:"failure_reason,omitempty"`
-	LogLength     int64           `json:"log_length"`
-	ResultAcked   bool            `json:"result_acked,omitempty"`
-	Attention     string          `json:"attention,omitempty"`
+	ExecutionID       string          `json:"execution_id"`
+	Phase             string          `json:"phase"`
+	Assignment        AgentAssignment `json:"assignment"`
+	AcceptedAt        time.Time       `json:"accepted_at"`
+	PermittedAt       time.Time       `json:"permitted_at,omitempty"`
+	StartedAt         time.Time       `json:"started_at,omitempty"`
+	FinishedAt        time.Time       `json:"finished_at,omitempty"`
+	PID               int             `json:"pid,omitempty"`
+	PGID              int             `json:"pgid,omitempty"`
+	ProcessToken      string          `json:"process_token,omitempty"`
+	ProcessTokenError string          `json:"process_token_error,omitempty"`
+	Status            string          `json:"status,omitempty"`
+	ExitCode          int             `json:"exit_code"`
+	Error             string          `json:"error,omitempty"`
+	FailureReason     string          `json:"failure_reason,omitempty"`
+	LogLength         int64           `json:"log_length"`
+	ResultAcked       bool            `json:"result_acked,omitempty"`
+	Attention         string          `json:"attention,omitempty"`
 }
 
 // agentJournal owns the agent spool layout: one directory per execution

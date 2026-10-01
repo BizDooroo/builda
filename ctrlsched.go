@@ -155,11 +155,19 @@ func queueReason(views []agentView, required []string) string {
 // atomic state mutation. Queue items are considered in enqueue order so a
 // blocked item never stalls the items behind it, and among eligible agents the
 // one with the oldest last assignment wins, breaking ties by agent ID.
+//
+// Occupancy is recomputed from the state inside the transaction. Reusing the
+// view captured before the lock would let two concurrent calls hand the same
+// agent two executions: the second caller holds a snapshot taken before the
+// first one committed, and an agent only ever runs the first of them, so the
+// rest would sit outside the queue where nothing can pick them up.
 func (c *Controller) scheduleOnce() error {
 	views := c.AgentViews()
 	available := map[string]agentView{}
 	for _, view := range views {
-		if view.schedulable() {
+		// Liveness and configuration are not part of the persisted state, so
+		// they are judged here; occupancy is judged in the transaction.
+		if view.Online && view.Definition.IsEnabled() && !view.Definition.Paused {
 			available[view.Definition.ID] = view
 		}
 	}
@@ -169,13 +177,23 @@ func (c *Controller) scheduleOnce() error {
 
 	assigned := false
 	err := c.store.mutate(func(st *controllerStateData) error {
+		occupied := computeOccupancy(st)
 		free := map[string]bool{}
 		lastAssigned := map[string]time.Time{}
 		for id := range available {
+			if _, busy := occupied.busy[id]; busy {
+				continue
+			}
+			if _, blocked := occupied.blocked[id]; blocked {
+				continue
+			}
 			free[id] = true
 			if state, ok := st.Agents[id]; ok && state != nil {
 				lastAssigned[id] = state.LastAssignedAt
 			}
+		}
+		if len(free) == 0 {
+			return errNoStateChange
 		}
 		queued := make([]*Execution, 0, len(st.Executions))
 		for _, execution := range st.Executions {

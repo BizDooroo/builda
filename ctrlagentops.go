@@ -56,7 +56,8 @@ func (c *Controller) CancelRequestsFor(agentID string) []string {
 }
 
 // Reconcile aligns controller state with what an agent reports it knows after
-// a restart or a network partition. An assignment that never received a start
+// a restart or a network partition. The returned list names only executions
+// this call acted on, so a standing escalation does not wake every poll. An assignment that never received a start
 // permit provably never ran and is safely requeued. An execution whose permit
 // was granted is uncertain and is flagged for an operator instead of being
 // reassigned or retried.
@@ -75,8 +76,8 @@ func (c *Controller) Reconcile(agentID string, known []string) ([]string, error)
 			if isExecutionTerminal(execution.Status) || knownSet[execution.ID] {
 				continue
 			}
-			unknown = append(unknown, execution.ID)
 			if !execution.PermitGranted {
+				unknown = append(unknown, execution.ID)
 				execution.Status = StatusQueued
 				execution.AgentID = ""
 				execution.AssignedAt = time.Time{}
@@ -88,6 +89,9 @@ func (c *Controller) Reconcile(agentID string, known []string) ([]string, error)
 				execution.NeedsAttention = true
 				execution.Attention = fmt.Sprintf("agent %s no longer tracks this execution after its start permit was granted; outcome is unknown", agentID)
 				changed = true
+				// Report it once, when it is first escalated. Repeating it on
+				// every poll would make the agent re-poll immediately and spin.
+				unknown = append(unknown, execution.ID)
 			}
 		}
 		if !changed {

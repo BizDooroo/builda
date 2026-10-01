@@ -30,6 +30,10 @@
 - A controller restart must not abort running work, and must not reassign an execution whose start permit was granted. Requeue only an assignment that provably never started.
 - A stopping agent must not block until a long build finishes. It stops supervising, leaves the script running in its own process group, reports nothing it does not know, and lets the next start reconcile the run.
 - An agent restart must never re-execute an incomplete run. Prove the process group ended and report `ABORTED`, or block the execution for operator attention. Never kill a process whose ownership cannot be proven, and never accept new work while blocked.
+- A reader draining a child's output must never stop early. Whoever stops reading leaves the child blocked on a full pipe, which deadlocks the run, so split an over-long line instead of treating it as an error.
+- The start permit is idempotent, so a lost response is retried, and an agent finishes anything its journal still owns before polling for more. Abandoning an accepted assignment strands the execution: the controller no longer offers it, and nothing re-delivers it.
+- A controller refusal that retrying cannot fix (the execution is gone, or this agent is not its owner) is escalated for an operator with the spool path, never retried forever and never silently dropped.
+- Reconciliation is reported to an agent once, when it acts. Repeating it on every poll turns the long poll into a hot loop.
 - Logs are written to the agent disk first and uploaded at byte offsets. Duplicate chunks are idempotent, a gap is refused with the durable offset, and a result is confirmed only once the controller holds every byte. The log file length is the durable record and is re-read on restart.
 - A job that exceeds its timeout is reported as `FAILED` with the failure reason `timeout`.
 

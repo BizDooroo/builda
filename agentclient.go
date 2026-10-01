@@ -4,12 +4,41 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// controllerError carries the controller's status code so the agent can tell
+// a transient failure from a refusal that retrying will never fix.
+type controllerError struct {
+	Path    string
+	Status  int
+	Message string
+}
+
+func (e *controllerError) Error() string {
+	return fmt.Sprintf("%s returned %d: %s", e.Path, e.Status, e.Message)
+}
+
+// isPermanentAgentError reports whether the controller refused the request in
+// a way that retrying cannot resolve: the execution is gone, or this agent is
+// not its owner, or the agent is no longer configured.
+func isPermanentAgentError(err error) bool {
+	var controllerErr *controllerError
+	if !errors.As(err, &controllerErr) {
+		return false
+	}
+	switch controllerErr.Status {
+	case http.StatusNotFound, http.StatusForbidden, http.StatusUnauthorized:
+		return true
+	default:
+		return false
+	}
+}
 
 // agentClient performs every controller call over authenticated outbound HTTP.
 // The agent never listens on a port.
@@ -54,7 +83,11 @@ func (c *agentClient) call(ctx context.Context, client *http.Client, path string
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %s: %s", path, resp.Status, strings.TrimSpace(string(payload)))
+		return &controllerError{
+			Path:    path,
+			Status:  resp.StatusCode,
+			Message: strings.TrimSpace(string(payload)),
+		}
 	}
 	if response == nil {
 		return nil

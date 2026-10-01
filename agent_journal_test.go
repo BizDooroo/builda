@@ -276,3 +276,54 @@ func findSleepBinary() (string, error) {
 	}
 	return "", os.ErrNotExist
 }
+
+// TestVerifyOrphanWithoutAProcessIdentity covers the case where the identity
+// could not be recorded: ownership is unprovable while the group is alive, and
+// the diagnosis says so rather than claiming the pid was recycled.
+func TestVerifyOrphanWithoutAProcessIdentity(t *testing.T) {
+	_, pgid, _ := startDetachedSleeper(t, "5")
+	t.Cleanup(func() { _ = killProcessGroup(pgid, syscall.SIGKILL) })
+
+	entry := &journalEntry{
+		ExecutionID:       "e",
+		Phase:             journalStarted,
+		PID:               pgid,
+		PGID:              pgid,
+		ProcessTokenError: "process identity is unavailable on this platform",
+	}
+	verdict := verifyOrphan(entry)
+	if verdict.Ended || verdict.Owned {
+		t.Fatalf("an unrecorded identity must be unprovable, got %+v", verdict)
+	}
+	if !strings.Contains(verdict.Details, "no process identity was recorded") {
+		t.Fatalf("expected an accurate diagnosis, got %q", verdict.Details)
+	}
+	if strings.Contains(verdict.Details, "reused") {
+		t.Fatalf("a missing identity must not be reported as a recycled pid: %q", verdict.Details)
+	}
+
+	// Once the group is gone it is provably ended even without an identity.
+	if err := killProcessGroup(pgid, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the group to disappear", func() bool { return verifyOrphan(entry).Ended })
+	verdict = verifyOrphan(entry)
+	if !verdict.Ended || !verdict.Owned {
+		t.Fatalf("a vanished group is provably ended, got %+v", verdict)
+	}
+}
+
+// TestFailedStartRollsBackToPermitted proves a process that never launched is
+// not left looking like one whose fate is unknown.
+func TestFailedStartRollsBackToPermitted(t *testing.T) {
+	entry := &journalEntry{ExecutionID: "e", Phase: journalPermitted}
+	// The phase before a launch attempt is permitted, and verifyOrphan treats
+	// every pre-start phase as "never started".
+	if verdict := verifyOrphan(entry); !verdict.Ended || !verdict.Owned {
+		t.Fatalf("a permitted entry must count as never started, got %+v", verdict)
+	}
+	entry.Phase = journalStarted
+	if verdict := verifyOrphan(entry); verdict.Ended {
+		t.Fatalf("a started entry with no pid must be unprovable, got %+v", verdict)
+	}
+}
