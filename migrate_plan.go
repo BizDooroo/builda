@@ -64,6 +64,47 @@ var legacyActionAliases = map[string]string{
 	"deploy": "app-store",
 }
 
+// taskProjectPath extracts the absolute project directory and platform from a
+// legacy task script.
+func taskProjectPath(script string) (string, string, bool) {
+	match := scriptProjectPattern.FindStringSubmatch(script)
+	if match == nil {
+		return "", "", false
+	}
+	return match[1], match[2], true
+}
+
+// inferWorkspaceRoot picks the directory every project sits under. Taking the
+// parent of each script path would be wrong: a project nested one level deeper,
+// such as "aladin-lamp/lamp_app", would otherwise yield its own root and a
+// project path that does not exist under the agent workspace.
+func inferWorkspaceRoot(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	if len(paths) == 1 {
+		return strings.TrimSuffix(path.Dir(paths[0]), "/")
+	}
+	segments := strings.Split(paths[0], "/")
+	for _, candidate := range paths[1:] {
+		other := strings.Split(candidate, "/")
+		limit := len(segments)
+		if len(other) < limit {
+			limit = len(other)
+		}
+		shared := 0
+		for shared < limit && segments[shared] == other[shared] {
+			shared++
+		}
+		segments = segments[:shared]
+	}
+	root := strings.TrimSuffix(strings.Join(segments, "/"), "/")
+	if root == "" {
+		return ""
+	}
+	return root
+}
+
 // planMigration drafts a mapping from a bundle. Everything it infers is
 // written to the mapping file so an operator can review and correct it before
 // anything is applied.
@@ -77,25 +118,34 @@ func planMigration(bundle *MigrationBundle, agentID, workspaceRoot string) (*Mig
 	diagnostics := make([]string, 0)
 
 	platforms := map[string]bool{}
-	roots := map[string]int{}
 	actions := map[string]map[string]bool{}
 
+	// Resolve the workspace root first, so every project path is expressed
+	// relative to the same directory however deeply it is nested.
+	observed := make([]string, 0, len(bundle.Tasks))
 	for _, task := range bundle.Tasks {
-		match := scriptProjectPattern.FindStringSubmatch(task.Script)
-		if match == nil {
+		if projectPath, _, ok := taskProjectPath(task.Script); ok {
+			observed = append(observed, projectPath)
+		}
+	}
+	root := strings.TrimSuffix(strings.TrimSpace(workspaceRoot), "/")
+	if root == "" {
+		root = inferWorkspaceRoot(observed)
+	}
+
+	for _, task := range bundle.Tasks {
+		absProject, platform, ok := taskProjectPath(task.Script)
+		if !ok {
 			mapping.Unmapped = append(mapping.Unmapped, task.ID)
 			diagnostics = append(diagnostics, fmt.Sprintf("task %q does not match a known build script shape; map it by hand", task.ID))
 			continue
 		}
-		absProject, platform := match[1], match[2]
-		root, project := path.Split(absProject)
-		root = strings.TrimSuffix(root, "/")
-		if root == "" || project == "" {
+		project := relativeProjectPath(root, absProject)
+		if project == "" {
 			mapping.Unmapped = append(mapping.Unmapped, task.ID)
-			diagnostics = append(diagnostics, fmt.Sprintf("task %q has an unexpected project path %q", task.ID, absProject))
+			diagnostics = append(diagnostics, fmt.Sprintf("task %q builds %q, which is not under the workspace root %q; map it by hand", task.ID, absProject, root))
 			continue
 		}
-		roots[root]++
 		platforms[platform] = true
 
 		jobID := platform + "-build"
@@ -129,7 +179,7 @@ func planMigration(bundle *MigrationBundle, agentID, workspaceRoot string) (*Mig
 		ID:            agentID,
 		Name:          agentID,
 		Labels:        agentLabelsForPlatforms(bundle.Machine, platforms),
-		WorkspaceRoot: pickWorkspaceRoot(workspaceRoot, roots),
+		WorkspaceRoot: root,
 	}
 	if workspaceRoot == "" {
 		diagnostics = append(diagnostics, fmt.Sprintf("workspace_root was inferred as %q from the legacy script paths; confirm it before applying", mapping.Agent.WorkspaceRoot))
@@ -153,20 +203,16 @@ func planMigration(bundle *MigrationBundle, agentID, workspaceRoot string) (*Mig
 	return mapping, diagnostics
 }
 
-// pickWorkspaceRoot prefers the explicit flag and otherwise takes the most
-// common root observed in the legacy scripts.
-func pickWorkspaceRoot(explicit string, roots map[string]int) string {
-	if strings.TrimSpace(explicit) != "" {
-		return explicit
+// relativeProjectPath expresses a project directory relative to the workspace
+// root, keeping every segment so a nested project stays addressable.
+func relativeProjectPath(root, absProject string) string {
+	if root == "" || absProject == "" {
+		return ""
 	}
-	best := ""
-	bestCount := 0
-	for root, count := range roots {
-		if count > bestCount || (count == bestCount && root < best) {
-			best, bestCount = root, count
-		}
+	if !strings.HasPrefix(absProject, root+"/") {
+		return ""
 	}
-	return best
+	return strings.TrimPrefix(absProject, root+"/")
 }
 
 func agentLabelsForPlatforms(machine string, platforms map[string]bool) []string {

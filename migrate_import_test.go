@@ -325,7 +325,7 @@ func TestMigrateCLIDefaultsToDryRun(t *testing.T) {
 	}
 
 	// plan prints the mapping without writing it.
-	out, err = newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/w")
+	out, err = newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/home/someone/git/dooroo")
 	if err != nil {
 		t.Fatalf("migrate plan: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestMigrateCLIDefaultsToDryRun(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(outDir, mappingFileName)); !os.IsNotExist(statErr) {
 		t.Fatal("migrate plan must default to a dry run")
 	}
-	if _, err := newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/w", "--apply"); err != nil {
+	if _, err := newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/home/someone/git/dooroo", "--apply"); err != nil {
 		t.Fatalf("migrate plan --apply: %v", err)
 	}
 	mappingPath := filepath.Join(outDir, mappingFileName)
