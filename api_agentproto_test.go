@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -368,5 +371,104 @@ func TestResolveAttentionIsAnOperatorDecision(t *testing.T) {
 	// And the agent is free again.
 	if !agentOf(t, controller, "linux-one").schedulable() {
 		t.Fatal("the agent must be schedulable once the execution is resolved")
+	}
+}
+
+// TestLogGrowthIsBounded proves a runaway agent cannot fill the controller
+// disk, while the protocol still converges: the agent's offsets keep
+// advancing and its result is still accepted.
+func TestLogGrowthIsBounded(t *testing.T) {
+	document := strings.Replace(testControllerConfig, "max_history: 50", "max_history: 50\n  max_log_bytes: 4096", 1)
+	controller := newTestController(t, document)
+	if got := controller.Runtime().MaxLogBytes; got != 4096 {
+		t.Fatalf("expected the configured cap, got %d", got)
+	}
+	markOnline(controller, "linux-one")
+	execution := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	if _, err := controller.GrantPermit("linux-one", execution.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	chunk := bytes.Repeat([]byte("x"), 1024)
+	offset := int64(0)
+	for i := 0; i < 40; i++ {
+		acked, err := controller.AppendLog("linux-one", AgentLogRequest{
+			ExecutionID: execution.ID, Offset: offset, Data: chunk,
+		})
+		if err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if acked <= offset {
+			t.Fatalf("the acknowledged offset must keep advancing, got %d after %d", acked, offset)
+		}
+		offset = acked
+	}
+
+	size, err := executionLogSize(controller.Runtime().LogDir, execution.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size > 4096+512 {
+		t.Fatalf("the log grew to %d bytes despite a 4096 byte cap", size)
+	}
+	stored := mustFind(t, controller, execution.ID)
+	if !stored.LogTruncated {
+		t.Fatal("a capped log must be recorded as truncated")
+	}
+	data, err := os.ReadFile(executionLogPath(controller.Runtime().LogDir, execution.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "log truncated at 4096 bytes") {
+		t.Fatalf("the log must say it was truncated, got the tail %q", string(data[len(data)-120:]))
+	}
+
+	// The agent's result still lands, because a truncated log can never match
+	// the length the agent reports.
+	response, err := controller.SubmitResult("linux-one", AgentResultRequest{
+		ExecutionID: execution.ID, Status: StatusSuccess, LogLength: offset,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.Accepted {
+		t.Fatalf("a truncated log must not block the result: %s", response.Reason)
+	}
+	if statusOf(t, controller, execution.ID) != StatusSuccess {
+		t.Fatal("the execution should have finished")
+	}
+}
+
+// TestLogIsClosedAfterTheFinalResult keeps a stale agent from rewriting
+// finished history.
+func TestLogIsClosedAfterTheFinalResult(t *testing.T) {
+	controller := newTestController(t, testControllerConfig)
+	markOnline(controller, "linux-one")
+	execution := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	if _, err := controller.GrantPermit("linux-one", execution.ID); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("finished output\n")
+	if _, err := controller.AppendLog("linux-one", AgentLogRequest{ExecutionID: execution.ID, Data: body}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.SubmitResult("linux-one", AgentResultRequest{
+		ExecutionID: execution.ID, Status: StatusSuccess, LogLength: int64(len(body)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := controller.AppendLog("linux-one", AgentLogRequest{
+		ExecutionID: execution.ID, Offset: int64(len(body)), Data: []byte("late\n"),
+	})
+	if !errors.Is(err, errLogClosed) {
+		t.Fatalf("expected a closed log to refuse more bytes, got %v", err)
+	}
+	size, err := executionLogSize(controller.Runtime().LogDir, execution.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len(body)) {
+		t.Fatalf("the finished log must not grow, got %d bytes", size)
 	}
 }

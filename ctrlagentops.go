@@ -173,11 +173,29 @@ func (c *Controller) Heartbeat(agentID string, request AgentHeartbeatRequest) Ag
 // AppendLog accepts an ordered log chunk at a byte offset. Duplicate chunks
 // are idempotent, a chunk past the durable end is rejected with the current
 // offset so the agent retransmits, and the file itself is the durable record.
+//
+// A log that reaches server.max_log_bytes stops growing. Further bytes are
+// acknowledged without being stored, so the agent still converges and its
+// result is still accepted, and the execution records that its log was
+// truncated. Refusing the bytes instead would deadlock the agent on a result
+// the controller could never match.
 func (c *Controller) AppendLog(agentID string, request AgentLogRequest) (int64, error) {
 	if err := c.requireExecutionOwner(agentID, request.ExecutionID); err != nil {
 		return 0, err
 	}
-	path := executionLogPath(c.Runtime().LogDir, request.ExecutionID)
+	if err := c.requireLogAppendable(request.ExecutionID); err != nil {
+		return 0, err
+	}
+	runtime := c.Runtime()
+	if truncated, offset := c.logTruncationState(request.ExecutionID); truncated {
+		// Already capped: acknowledge the agent's position so it moves on.
+		acked := request.Offset + int64(len(request.Data))
+		if acked < offset {
+			acked = offset
+		}
+		return acked, nil
+	}
+	path := executionLogPath(runtime.LogDir, request.ExecutionID)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return 0, err
@@ -196,15 +214,84 @@ func (c *Controller) AppendLog(agentID string, request AgentLogRequest) (int64, 
 	if skip >= int64(len(request.Data)) {
 		return size, nil
 	}
-	if _, err := file.WriteAt(request.Data[skip:], size); err != nil {
-		return size, err
+	payload := request.Data[skip:]
+	acked := size + int64(len(payload))
+	truncate := false
+	if size+int64(len(payload)) > runtime.MaxLogBytes {
+		room := runtime.MaxLogBytes - size
+		if room < 0 {
+			room = 0
+		}
+		payload = payload[:room]
+		truncate = true
+	}
+	if len(payload) > 0 {
+		if _, err := file.WriteAt(payload, size); err != nil {
+			return size, err
+		}
+	}
+	if truncate {
+		notice := fmt.Sprintf("\n[builda] log truncated at %d bytes (server.max_log_bytes); the agent kept its full local copy\n", runtime.MaxLogBytes)
+		if _, err := file.WriteAt([]byte(notice), size+int64(len(payload))); err != nil {
+			return size, err
+		}
 	}
 	if err := file.Sync(); err != nil {
 		return size, err
 	}
-	acked := size + int64(len(request.Data)) - skip
+	if truncate {
+		if err := c.markLogTruncated(request.ExecutionID); err != nil {
+			return size, err
+		}
+	}
 	c.store.SetLogOffset(request.ExecutionID, acked)
 	return acked, nil
+}
+
+// requireLogAppendable refuses bytes for a run that already reported its
+// final result, so a stale agent cannot rewrite finished history.
+func (c *Controller) requireLogAppendable(executionID string) error {
+	var err error
+	c.store.read(func(st *controllerStateData) {
+		execution := st.find(executionID)
+		if execution == nil {
+			err = errExecutionNotFound
+			return
+		}
+		if execution.LogComplete {
+			err = errLogClosed
+		}
+	})
+	return err
+}
+
+func (c *Controller) logTruncationState(executionID string) (bool, int64) {
+	truncated := false
+	offset := int64(0)
+	c.store.read(func(st *controllerStateData) {
+		if execution := st.find(executionID); execution != nil {
+			truncated, offset = execution.LogTruncated, execution.LogOffset
+		}
+	})
+	return truncated, offset
+}
+
+func (c *Controller) markLogTruncated(executionID string) error {
+	err := c.store.mutate(func(st *controllerStateData) error {
+		execution := st.find(executionID)
+		if execution == nil {
+			return errExecutionNotFound
+		}
+		if execution.LogTruncated {
+			return errNoStateChange
+		}
+		execution.LogTruncated = true
+		return nil
+	})
+	if errors.Is(err, errNoStateChange) {
+		return nil
+	}
+	return err
 }
 
 // SubmitResult finalizes an execution. The result is only confirmed once the
@@ -217,7 +304,8 @@ func (c *Controller) SubmitResult(agentID string, request AgentResultRequest) (A
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return AgentResultResponse{}, err
 	}
-	if size != request.LogLength {
+	truncated, _ := c.logTruncationState(request.ExecutionID)
+	if !truncated && size != request.LogLength {
 		return AgentResultResponse{
 			Accepted:  false,
 			AckOffset: size,

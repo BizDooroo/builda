@@ -8,6 +8,9 @@ server:
   # Relative paths resolve from the directory holding this config file.
   state_dir: "state"
   max_history: 5000
+  # Per-execution log cap. A capped log says so in its own text and the agent
+  # keeps its full local copy.
+  max_log_bytes: 67108864
   heartbeat_interval: "5s"
   offline_after: "30s"
   long_poll_timeout: "25s"

@@ -19,6 +19,9 @@ func validateControllerConfig(cfg *ControllerConfig) error {
 	if cfg.Server.MaxHistory < 0 {
 		return fmt.Errorf("server.max_history must be zero or greater")
 	}
+	if cfg.Server.MaxLogBytes < 0 {
+		return fmt.Errorf("server.max_log_bytes must be zero or greater")
+	}
 	if _, err := parseDurationField("server.heartbeat_interval", cfg.Server.HeartbeatInterval, defaultHeartbeatInterval); err != nil {
 		return err
 	}

@@ -18,6 +18,10 @@ const (
 	defaultLongPollTimeout    = 25 * time.Second
 	defaultControllerStateDir = "state"
 	maxQueueLabelCount        = 32
+	// defaultMaxLogBytes bounds one execution log. A real build is far below
+	// it, while an agent that never stops writing cannot fill the disk and
+	// take the whole controller down with it.
+	defaultMaxLogBytes = 64 << 20
 )
 
 // ControllerConfig is the YAML document that drives the controller role. Agent
@@ -39,6 +43,7 @@ type ControllerServer struct {
 	HeartbeatInterval string   `yaml:"heartbeat_interval,omitempty" json:"heartbeat_interval,omitempty"`
 	OfflineAfter      string   `yaml:"offline_after,omitempty" json:"offline_after,omitempty"`
 	LongPollTimeout   string   `yaml:"long_poll_timeout,omitempty" json:"long_poll_timeout,omitempty"`
+	MaxLogBytes       int64    `yaml:"max_log_bytes,omitempty" json:"max_log_bytes,omitempty"`
 	PublicURL         string   `yaml:"public_url,omitempty" json:"public_url,omitempty"`
 }
 
@@ -108,6 +113,7 @@ type ControllerRuntime struct {
 	StatePath         string
 	CredentialsPath   string
 	MaxHistory        int
+	MaxLogBytes       int64
 	HeartbeatInterval time.Duration
 	OfflineAfter      time.Duration
 	LongPollTimeout   time.Duration
@@ -160,6 +166,10 @@ func controllerRuntime(configPath string, cfg ControllerConfig) (ControllerRunti
 	if maxHistory <= 0 {
 		maxHistory = defaultMaxHistory
 	}
+	maxLogBytes := cfg.Server.MaxLogBytes
+	if maxLogBytes <= 0 {
+		maxLogBytes = defaultMaxLogBytes
+	}
 	return ControllerRuntime{
 		ConfigPath:        configPath,
 		StateDir:          stateDir,
@@ -167,6 +177,7 @@ func controllerRuntime(configPath string, cfg ControllerConfig) (ControllerRunti
 		StatePath:         filepath.Join(stateDir, "state.json"),
 		CredentialsPath:   filepath.Join(stateDir, "credentials.json"),
 		MaxHistory:        maxHistory,
+		MaxLogBytes:       maxLogBytes,
 		HeartbeatInterval: heartbeat,
 		OfflineAfter:      offline,
 		LongPollTimeout:   longPoll,

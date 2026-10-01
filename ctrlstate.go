@@ -69,8 +69,9 @@ type Execution struct {
 	NeedsAttention  bool   `json:"needs_attention,omitempty"`
 	Attention       string `json:"attention,omitempty"`
 
-	LogOffset   int64 `json:"log_offset"`
-	LogComplete bool  `json:"log_complete,omitempty"`
+	LogOffset    int64 `json:"log_offset"`
+	LogComplete  bool  `json:"log_complete,omitempty"`
+	LogTruncated bool  `json:"log_truncated,omitempty"`
 
 	ExitCode      int    `json:"exit_code"`
 	Error         string `json:"error,omitempty"`

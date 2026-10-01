@@ -20,6 +20,8 @@ What is implemented:
 - API bearer tokens for external automation, and per-agent tokens that only reach the agent API and only for their own agent identity.
 - Secrets are generated randomly, shown once, and stored only as verifiers in a separate credential file with mode `0600`. No API response ever returns a verifier.
 
+Per-execution logs are capped by `server.max_log_bytes` (64 MiB by default) so an agent that never stops writing cannot fill the controller's disk; a capped log says so in its own text and the agent keeps its full local copy.
+
 What is not implemented: transport security of its own, authorization roles, audit logging, tenant isolation, and the rest of a production security program. **Put the controller behind HTTPS whenever traffic crosses a trust boundary**, for example a reverse proxy terminating TLS on the same host. Binding to `:28080` or `0.0.0.0:28080` exposes the controller on every interface; use those only on a network you fully trust.
 
 Job scripts are privileged shell execution on the agent host. Treat every job, every catalog path, and the agent shell header as such.
@@ -132,6 +134,8 @@ curl -H "Authorization: Bearer $TOKEN" \
 ## Migrating from the standalone role
 
 `builda serve` is the deprecated standalone role, kept so an existing installation can keep running while its history moves across. It no longer serves a Web UI; its JSON API stays available.
+
+> **The standalone role has no authentication.** Anyone who can reach its address can start any configured task, which means running a shell script as the service user. That has always been true of it, and it is left unchanged so a running installation keeps working until it is migrated. Keep it on loopback or a trusted private network, migrate it, and then stop it. Only `/api/config` is protected, by the plain `server.config_password`, and that is disabled by default. None of the controller's authentication applies to this role.
 
 Every `builda migrate` subcommand reports what it would do and changes nothing until `--apply` is passed, and the legacy installation is only ever read. Run `migrate import` against a stopped controller: the state snapshot has a single writer.
 

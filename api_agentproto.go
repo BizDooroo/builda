@@ -173,6 +173,8 @@ func respondAgentError(w http.ResponseWriter, err error) {
 		respondError(w, http.StatusNotFound, "execution not found")
 	case errors.Is(err, errNotExecutionOwner):
 		respondError(w, http.StatusForbidden, "execution is not assigned to this agent")
+	case errors.Is(err, errLogClosed):
+		respondError(w, http.StatusConflict, "the execution already reported its final result")
 	default:
 		respondError(w, http.StatusInternalServerError, err.Error())
 	}

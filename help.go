@@ -57,6 +57,7 @@ Config file
     addresses: ["127.0.0.1:28080"]   # listen addresses, trusted interfaces
     state_dir: "state"               # state.json, logs/, credentials.json
     max_history: 5000                # terminal executions retained
+    max_log_bytes: 67108864          # per-execution log cap
     heartbeat_interval: "5s"
     offline_after: "30s"
     long_poll_timeout: "25s"

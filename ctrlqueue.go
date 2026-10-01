@@ -12,6 +12,7 @@ var (
 	errJobNotFound       = errors.New("job not found")
 	errJobDisabled       = errors.New("job is disabled")
 	errExecutionDone     = errors.New("execution already finished")
+	errLogClosed         = errors.New("execution log is closed")
 	errNotExecutionOwner = errors.New("execution is not assigned to this agent")
 )
 

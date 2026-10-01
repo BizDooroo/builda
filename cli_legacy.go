@@ -18,7 +18,7 @@ func helpText(configPath string) string {
 // Legacy standalone server. It is retained only so an existing installation
 // can keep serving while its history is exported and imported into a
 // controller. New operation uses the controller and agent roles.
-const legacyDeprecationNotice = "builda serve runs the legacy standalone role; new deployments should use \"builda controller serve\" and \"builda agent run\""
+const legacyDeprecationNotice = "builda serve runs the legacy standalone role, which has no authentication: anyone who can reach its address can run a configured task. Keep it on a trusted network, migrate it with \"builda migrate\", and use \"builda controller serve\" and \"builda agent run\" instead."
 
 func newLegacyServeCommand(opts *serveOptions) *cobra.Command {
 	serveCmd := &cobra.Command{
