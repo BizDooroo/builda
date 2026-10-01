@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	stdpath "path"
 	"strings"
 	"time"
 )
@@ -264,15 +265,15 @@ func controllerPageFile(path string) (string, bool) {
 	return "", false
 }
 
-func isPublicAsset(path string) bool {
-	switch {
-	case strings.HasPrefix(path, "_astro/"):
-		return true
-	case path == "favicon.svg":
-		return true
-	default:
+// isPublicAsset decides what an anonymous browser may fetch so the login page
+// can render. It judges the cleaned path, so a traversal segment can never
+// turn an asset prefix into a pass for an application page.
+func isPublicAsset(requested string) bool {
+	cleaned := strings.TrimPrefix(stdpath.Clean("/"+requested), "/")
+	if cleaned != requested {
 		return false
 	}
+	return strings.HasPrefix(cleaned, "_astro/") || cleaned == "favicon.svg"
 }
 
 // clientKey identifies a login client for rate limiting.

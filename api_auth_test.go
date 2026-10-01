@@ -286,3 +286,47 @@ func TestLogoutClearsTheSession(t *testing.T) {
 	recorder = request(t, api, session, http.MethodGet, "/api/meta", nil)
 	requireStatus(t, recorder, http.StatusUnauthorized)
 }
+
+// TestPublicAssetMatchingRejectsTraversal keeps the anonymous asset prefix
+// from becoming a way to fetch an application page without a session.
+func TestPublicAssetMatchingRejectsTraversal(t *testing.T) {
+	allowed := []string{"_astro/jobs.js", "_astro/index.css", "favicon.svg"}
+	for _, path := range allowed {
+		if !isPublicAsset(path) {
+			t.Fatalf("%q should be publicly readable", path)
+		}
+	}
+	denied := []string{
+		"_astro/../index.html",
+		"_astro/./../runs/index.html",
+		"_astro//../index.html",
+		"index.html",
+		"runs/index.html",
+		"settings/index.html",
+		"../favicon.svg",
+		"",
+	}
+	for _, path := range denied {
+		if isPublicAsset(path) {
+			t.Fatalf("%q must not be publicly readable", path)
+		}
+	}
+}
+
+// TestAnonymousCannotReachApplicationPagesByTraversal is the end-to-end check
+// for the same concern.
+func TestAnonymousCannotReachApplicationPagesByTraversal(t *testing.T) {
+	api, _ := newTestAPI(t, testControllerConfig)
+	for _, target := range []string{
+		"/_astro/../index.html",
+		"/_astro/%2e%2e/index.html",
+		"/_astro/../settings/index.html",
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		recorder := httptest.NewRecorder()
+		api.routes().ServeHTTP(recorder, req)
+		if recorder.Code == http.StatusOK {
+			t.Fatalf("%s served a page to an anonymous caller: %s", target, recorder.Body.String()[:120])
+		}
+	}
+}

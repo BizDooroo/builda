@@ -385,3 +385,69 @@ func TestWriteFileAtomicSyncLeavesNoTemporaryFile(t *testing.T) {
 		t.Fatalf("expected only the target file, got %d entries", len(entries))
 	}
 }
+
+// TestConfigEditPicksUpDirectFileEdits proves an edit made through the API is
+// applied on top of a change someone made to the file by hand, instead of
+// silently discarding it.
+func TestConfigEditPicksUpDirectFileEdits(t *testing.T) {
+	controller := newTestController(t, testControllerConfig)
+	path := controller.Runtime().ConfigPath
+
+	// Someone edits the file directly while the controller is running.
+	direct := configDocumentWith("jobs:\n", "jobs:\n  - id: \"added-by-hand\"\n    script: \"echo hi\"\n")
+	if err := os.WriteFile(path, []byte(direct), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := controller.editConfig(func(cfg *ControllerConfig) error {
+		cfg.Jobs = append(cfg.Jobs, JobConfig{ID: "added-by-api", Script: "echo api"})
+		return nil
+	}); err != nil {
+		t.Fatalf("edit config: %v", err)
+	}
+
+	cfg := controller.Config()
+	for _, id := range []string{"added-by-hand", "added-by-api", "android-build"} {
+		if _, ok := findJob(cfg, id); !ok {
+			t.Fatalf("expected job %q to survive the edit", id)
+		}
+	}
+	reparsed, err := loadControllerConfig(path)
+	if err != nil {
+		t.Fatalf("the persisted document must stay loadable: %v", err)
+	}
+	if len(reparsed.Jobs) != len(cfg.Jobs) {
+		t.Fatalf("the file and memory disagree: %d vs %d jobs", len(reparsed.Jobs), len(cfg.Jobs))
+	}
+}
+
+// TestConfigEditRejectsAWriteRacedByTheFile covers the guard: if the document
+// changes between the read and the write, the edit is refused rather than
+// clobbering it.
+func TestConfigEditRejectsAWriteRacedByTheFile(t *testing.T) {
+	controller := newTestController(t, testControllerConfig)
+	path := controller.Runtime().ConfigPath
+
+	err := controller.editConfig(func(cfg *ControllerConfig) error {
+		// Simulate another writer landing after this callback read the config.
+		raced := configDocumentWith("max_history: 50", "max_history: 77")
+		if writeErr := os.WriteFile(path, []byte(raced), 0o600); writeErr != nil {
+			return writeErr
+		}
+		cfg.Jobs = append(cfg.Jobs, JobConfig{ID: "late", Script: "echo late"})
+		return nil
+	})
+	if !errors.Is(err, errConfigChanged) {
+		t.Fatalf("expected the raced write to be refused, got %v", err)
+	}
+	onDisk, readErr := loadControllerConfig(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if onDisk.Server.MaxHistory != 77 {
+		t.Fatalf("the other writer's document must survive, got max_history %d", onDisk.Server.MaxHistory)
+	}
+	if _, ok := findJob(onDisk, "late"); ok {
+		t.Fatal("the refused edit must not reach the file")
+	}
+}

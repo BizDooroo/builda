@@ -150,10 +150,7 @@ func (c *Controller) replaceConfig(cfg ControllerConfig, guard fileStamp, enforc
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err == nil && !onDisk.equal(current) {
-			return errConfigChanged
-		}
-		if err == nil && !guard.equal(onDisk) {
+		if err == nil && (!onDisk.equal(current) || !onDisk.equal(guard)) {
 			return errConfigChanged
 		}
 	}
@@ -180,19 +177,23 @@ func (c *Controller) replaceConfig(cfg ControllerConfig, guard fileStamp, enforc
 var errConfigChanged = errors.New("controller config changed since it was read")
 
 // editConfig serializes config mutations so two admins cannot clobber each
-// other, and applies the change only when validation and persistence succeed.
+// other. It first picks up any edit made directly to the file so the change is
+// applied on top of the current document, and it refuses to write if the file
+// changes again between that read and the write.
 func (c *Controller) editConfig(fn func(cfg *ControllerConfig) error) error {
 	c.configEditMu.Lock()
 	defer c.configEditMu.Unlock()
-	cfg := c.Config()
-	next := cloneControllerConfig(cfg)
+	if err := c.reloadConfigIfChanged(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reload controller config before editing: %w", err)
+	}
+	next := cloneControllerConfig(c.Config())
 	if err := fn(&next); err != nil {
 		return err
 	}
 	c.mu.RLock()
 	guard := c.configStamp
 	c.mu.RUnlock()
-	return c.replaceConfig(next, guard, false)
+	return c.replaceConfig(next, guard, true)
 }
 
 func cloneControllerConfig(cfg ControllerConfig) ControllerConfig {
