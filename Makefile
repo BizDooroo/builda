@@ -1,4 +1,4 @@
-.PHONY: fmt lint test build check
+.PHONY: fmt lint test race build check
 
 fmt:
 	gofmt -w *.go
@@ -12,9 +12,12 @@ test:
 	pnpm --dir web build
 	go test ./...
 
+race:
+	go test -race ./...
+
 build:
 	pnpm --dir web install --frozen-lockfile
 	pnpm --dir web build
 	go build -o builda .
 
-check: fmt lint test build
+check: fmt lint test race build

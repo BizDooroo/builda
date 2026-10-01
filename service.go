@@ -160,10 +160,19 @@ func bindServiceNameFlag(cmd *cobra.Command, opts *serviceOptions) {
 	cmd.Flags().StringVar(&opts.name, "name", opts.name, "service name")
 }
 
+// serviceActionSummaries keep the command list readable; "status the daemon"
+// is not a sentence.
+var serviceActionSummaries = map[string]string{
+	"start":   "Start the user daemon if it is not already running",
+	"stop":    "Stop the user daemon",
+	"restart": "Restart the user daemon",
+	"status":  "Print the current state of the user daemon",
+}
+
 func newServiceControlCommand(opts *serviceOptions, action string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          action,
-		Short:        titleServiceAction(action) + " the user daemon",
+		Short:        serviceActionSummaries[action],
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -173,13 +182,6 @@ func newServiceControlCommand(opts *serviceOptions, action string) *cobra.Comman
 	bindServiceNameFlag(cmd, opts)
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "print the planned commands without running them")
 	return cmd
-}
-
-func titleServiceAction(action string) string {
-	if action == "" {
-		return action
-	}
-	return strings.ToUpper(action[:1]) + action[1:]
 }
 
 // roleDefaultServiceName keeps controller and agent units distinct on a host

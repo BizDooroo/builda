@@ -160,9 +160,10 @@ Move a legacy standalone installation onto the controller and agent roles.
 Every subcommand reports what it would do and changes nothing until --apply
 is passed. The legacy installation is only ever read.
 
-  1. On each legacy machine, stop its service, then export:
+  1. On each legacy machine, stop its service, back up its state, then export:
 
        builda service stop
+       cp -a ~/.config/builda ~/builda-backup-$(date +%Y%m%d)
        builda migrate export --machine linux \
          --config ~/.config/builda/config.yaml --out-dir ./bundle-linux --apply
 
@@ -197,10 +198,18 @@ is passed. The legacy installation is only ever read.
      log is reported as a diagnostic and the run is still imported without one.
      Only terminal legacy runs are imported, so an import can never queue work.
 
+  5. Install and start the new services, then verify before retiring the old
+     one:
+
+       builda controller service install --binary "$(command -v builda)"
+       builda agent service install --binary "$(command -v builda)"
+       builda controller service status
+
 Rollback
 
-  The legacy config, logs, and runs.json are left untouched. To roll back,
-  stop the new services and start the legacy one again:
+  The legacy config, logs, and runs.json are left untouched, and the backup
+  from step 1 is a second copy. To roll back, stop the new services and start
+  the legacy one again:
 
        builda controller service stop
        builda agent service stop
