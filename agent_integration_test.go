@@ -92,8 +92,8 @@ func (h *agentHarness) stop() {
 	h.cancel = nil
 }
 
-// restart simulates the agent process being replaced while keeping its spool.
-func (h *agentHarness) restart(t *testing.T) {
+// rebuild recreates the agent from the current runtime, keeping its spool.
+func (h *agentHarness) rebuild(t *testing.T) {
 	t.Helper()
 	h.stop()
 	token, err := readAgentToken(h.runtime.CredentialsPath)
@@ -105,6 +105,12 @@ func (h *agentHarness) restart(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.agent = agent
+}
+
+// restart simulates the agent process being replaced while keeping its spool.
+func (h *agentHarness) restart(t *testing.T) {
+	t.Helper()
+	h.rebuild(t)
 	h.start(t)
 }
 
@@ -485,4 +491,84 @@ func readPID(t *testing.T, path string) int {
 		t.Fatalf("unexpected pid %d", pid)
 	}
 	return pid
+}
+
+// TestAgentScriptHeaderIsAppliedAtExecution proves the shell header is taken
+// from the agent host at execution time, so platform startup such as a PATH
+// export or a profile stays local to the machine that runs the build.
+func TestAgentScriptHeaderIsAppliedAtExecution(t *testing.T) {
+	controller, _, agents := newTestFleet(t, scriptedConfig("echo \"header=$AGENT_LOCAL_MARKER\"", "30s"), "linux-one")
+	harness := agents["linux-one"]
+	harness.runtime.ScriptHeader = "#!/usr/bin/env bash\nset -euo pipefail\nexport AGENT_LOCAL_MARKER=from-this-host"
+	harness.rebuild(t)
+	harness.start(t)
+
+	execution := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	waitFor(t, "the run to succeed", func() bool {
+		return statusOf(t, controller, execution.ID) == StatusSuccess
+	})
+	log := readControllerLog(t, controller, execution.ID)
+	if !strings.Contains(log, "header=from-this-host") {
+		t.Fatalf("the agent-local header must be prepended at execution, got:\n%s", log)
+	}
+	// The header itself is a host detail: the controller stores the job script
+	// it sent, never the agent's shell startup.
+	stored := mustFind(t, controller, execution.ID)
+	if strings.Contains(stored.Script, "from-this-host") || strings.Contains(stored.JobSnapshot.Script, "from-this-host") {
+		t.Fatal("the agent shell header must never reach the controller")
+	}
+}
+
+// TestPausingAnAgentDoesNotDisturbItsRunningJob pins the pause semantics:
+// pause only stops new assignments.
+func TestPausingAnAgentDoesNotDisturbItsRunningJob(t *testing.T) {
+	dir := t.TempDir()
+	script := `for i in $(seq 1 200); do
+  if [ -f "` + dir + `/go" ]; then break; fi
+  sleep 0.05
+done
+echo released`
+	controller, _, agents := newTestFleet(t, scriptedConfig(script, "60s"), "linux-one")
+	agents["linux-one"].start(t)
+
+	running := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	waitFor(t, "the run to start", func() bool {
+		return statusOf(t, controller, running.ID) == StatusRunning
+	})
+
+	if err := controller.editConfig(func(cfg *ControllerConfig) error {
+		for index := range cfg.Agents {
+			if cfg.Agents[index].ID == "linux-one" {
+				cfg.Agents[index].Paused = true
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new execution waits, with the pause named as the reason.
+	queued := enqueue(t, controller, "android-build", map[string]string{"project": "beta"})
+	if statusOf(t, controller, queued.ID) != StatusQueued {
+		t.Fatal("a paused agent must not receive new work")
+	}
+	if reason := queueReason(controller.AgentViews(), queued.Labels); reason != QueueReasonPaused {
+		t.Fatalf("expected the paused reason, got %q", reason)
+	}
+	// The job already running is untouched and completes normally.
+	if statusOf(t, controller, running.ID) != StatusRunning {
+		t.Fatal("pausing an agent must not disturb the job it is already running")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the running job to finish", func() bool {
+		return statusOf(t, controller, running.ID) == StatusSuccess
+	})
+	if !strings.Contains(readControllerLog(t, controller, running.ID), "released") {
+		t.Fatal("the paused agent must still have completed its job")
+	}
+	if statusOf(t, controller, queued.ID) != StatusQueued {
+		t.Fatal("the queued execution must still be waiting on the pause")
+	}
 }
