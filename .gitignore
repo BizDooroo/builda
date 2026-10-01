@@ -8,6 +8,12 @@ web/node_modules/
 .env.*
 !.env.example
 
+# Role runtime state: controller snapshot/logs and agent spool/journal
+state/
+spool/
+# Admin password verifiers and agent tokens, never committed
+credentials.json
+
 # Go build and test output
 /builda
 dist/
