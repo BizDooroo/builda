@@ -37,6 +37,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(
 		newControllerCommand(),
 		newAgentCommand(),
+		newMigrateCommand(),
 		newVersionCommand(),
 		newLegacyServeCommand(legacyOpts),
 		newLegacyConfigCommand(legacyOpts),

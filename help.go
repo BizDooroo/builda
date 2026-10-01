@@ -26,6 +26,15 @@ Quick start
   builda agent enroll --config agent.yaml < token.txt
   builda agent run --config agent.yaml
 
+Migration from the legacy standalone server
+
+  builda migrate export --config <legacy config> --out-dir bundle
+  builda migrate plan --bundle bundle --out mapping.yaml
+  builda migrate config --bundle bundle --map mapping.yaml --out-dir new
+  builda migrate import --bundle bundle --map mapping.yaml --config controller.yaml
+
+  Every migrate subcommand is a dry run until --apply is passed.
+
 Security
 
   Builda is an internal tool for a private network and is not hardened.
@@ -143,4 +152,57 @@ Recovery
   An agent restart never re-executes an incomplete run. The agent proves the
   previous process group ended and reports ABORTED, or escalates the execution
   for operator attention instead of guessing or killing an unrelated process.
+`
+
+const migrateHelp = `
+Move a legacy standalone installation onto the controller and agent roles.
+
+Every subcommand reports what it would do and changes nothing until --apply
+is passed. The legacy installation is only ever read.
+
+  1. On each legacy machine, stop its service, then export:
+
+       builda service stop
+       builda migrate export --machine linux \
+         --config ~/.config/builda/config.yaml --out-dir ./bundle-linux --apply
+
+     Export reads config.yaml and logs/runs.json as data. It never builds a
+     runner, so no queued legacy run can start while you migrate.
+
+  2. Draft a mapping and review it by hand:
+
+       builda migrate plan --bundle ./bundle-linux \
+         --agent-id linux-android --workspace-root "$HOME/git/dooroo" \
+         --out ./bundle-linux/mapping.yaml --apply
+
+     The mapping records which job each legacy task becomes, which catalog
+     project it selects, and how legacy input values map onto new parameter
+     values. iOS "adhoc" and "deploy" map to "ad-hoc" and "app-store".
+
+  3. Generate the new role configs. Several machines can be merged at once so a
+     project that exists on both platforms becomes one catalog entry carrying
+     both platform labels:
+
+       builda migrate config --bundle ./bundle-linux --map ./bundle-linux/mapping.yaml \
+         --bundle ./bundle-mm --map ./bundle-mm/mapping.yaml --out-dir ./new --apply
+
+  4. Import history into the controller:
+
+       builda migrate import --bundle ./bundle-linux \
+         --map ./bundle-linux/mapping.yaml --config ./new/controller.yaml --apply
+
+     Imported executions get new IDs, keep the original machine and legacy run
+     ID for idempotency, and store the original task snapshot, name, inputs,
+     and timeout. Log files are copied under the new execution ID. A missing
+     log is reported as a diagnostic and the run is still imported without one.
+     Only terminal legacy runs are imported, so an import can never queue work.
+
+Rollback
+
+  The legacy config, logs, and runs.json are left untouched. To roll back,
+  stop the new services and start the legacy one again:
+
+       builda controller service stop
+       builda agent service stop
+       builda service start
 `
