@@ -23,6 +23,7 @@ type Session struct {
 	ID      string
 	User    string
 	CSRF    string
+	Created time.Time
 	Expires time.Time
 }
 
@@ -48,7 +49,8 @@ func (s *SessionStore) Create(user string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	session := &Session{ID: id, User: user, CSRF: csrf, Expires: time.Now().Add(s.ttl)}
+	now := time.Now()
+	session := &Session{ID: id, User: user, CSRF: csrf, Created: now, Expires: now.Add(s.ttl)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweepLocked()
@@ -80,11 +82,17 @@ func (s *SessionStore) Delete(id string) {
 	delete(s.sessions, id)
 }
 
-// DeleteAll invalidates every session, used when the admin password rotates.
-func (s *SessionStore) DeleteAll() {
+// DeleteBefore invalidates every session created before a moment, which is how
+// an admin password rotation made with the CLI takes effect in a controller
+// that is already running.
+func (s *SessionStore) DeleteBefore(cutoff time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions = map[string]*Session{}
+	for id, session := range s.sessions {
+		if session.Created.Before(cutoff) {
+			delete(s.sessions, id)
+		}
+	}
 }
 
 func (s *SessionStore) sweepLocked() {

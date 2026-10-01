@@ -7,6 +7,9 @@
 - Browser sessions use an HttpOnly, SameSite cookie, marked Secure over HTTPS. Require a CSRF token and a same-origin check on every browser state change. Bearer-token callers do not use CSRF.
 - Generate tokens randomly, return the raw secret exactly once, and persist only a verifier. Support rotation and revocation. Per-agent tokens reach only the agent API and only for their own agent identity.
 - Keep credentials in a protected file separate from config, with mode `0600`. Never return a verifier, salt, or hash from any API, and never write one into a config document.
+- The credential file is the authority, not an in-memory copy. The CLI writes it from another process, so re-read it before every verification and before every write. Caching it lets a revoked token keep working until restart, and a later write resurrects it from the stale document. Bound how much of it is read.
+- A credential rotation must end existing browser sessions, including one performed with the CLI against a running controller.
+- Read a request body once. Decoding it and then reading "the rest" hands a fallback parser a truncated document, and detect an envelope by its shape rather than by whether parsing happened to succeed.
 - Parameter values are persisted in run state, written to run logs, and may appear in script output. Do not treat a parameter as a secret transport; keep credentials in the agent environment, which never leaves the agent host.
 - Keep the sample listen address on loopback. Document that `0.0.0.0` or a bare `:PORT` exposes the controller broadly, and require HTTPS whenever traffic crosses a trust boundary.
 - Do not commit secrets, tokens, private keys, local `.env` files, run logs, agent spool contents, or script output. Run `gitleaks detect --source . --no-banner --redact --verbose` before claiming the repository is safe to publish.

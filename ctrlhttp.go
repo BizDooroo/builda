@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log"
@@ -164,6 +165,11 @@ func (s *ControllerAPI) authenticate(r *http.Request) (principal, bool) {
 	if err != nil {
 		return principal{}, false
 	}
+	// A password rotation performed with the CLI must take effect here, so
+	// sessions older than the current admin credential are dropped.
+	if rotated := s.controller.auth.AdminUpdatedAt(); !rotated.IsZero() {
+		s.sessions.DeleteBefore(rotated)
+	}
 	session, ok := s.sessions.Get(cookie.Value)
 	if !ok {
 		return principal{}, false
@@ -178,7 +184,7 @@ func (s *ControllerAPI) checkCSRF(r *http.Request, who principal) error {
 		return errors.New("session is missing")
 	}
 	token := r.Header.Get(csrfHeaderName)
-	if token == "" || token != who.Session.CSRF {
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(who.Session.CSRF)) != 1 {
 		return errors.New("CSRF token did not match")
 	}
 	return checkSameOrigin(r)
@@ -234,7 +240,9 @@ func (s *ControllerAPI) handlePage(w http.ResponseWriter, r *http.Request) {
 		serveWebFile(w, r, path)
 		return
 	}
-	if _, ok := s.authenticate(r); !ok {
+	// Pages are for the browser. An agent token authenticates the agent API
+	// and has no business fetching the management UI.
+	if who, ok := s.authenticate(r); !ok || who.Kind != principalSession {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			respondError(w, http.StatusUnauthorized, "authentication required")
 			return

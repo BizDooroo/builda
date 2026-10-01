@@ -208,7 +208,7 @@ func TestLoginRateLimit(t *testing.T) {
 }
 
 func TestSessionLifecycle(t *testing.T) {
-	store := newSessionStore(50 * time.Millisecond)
+	store := newSessionStore(2 * time.Second)
 	session, err := store.Create(adminUserName)
 	if err != nil {
 		t.Fatal(err)
@@ -222,8 +222,14 @@ func TestSessionLifecycle(t *testing.T) {
 	if _, ok := store.Get(""); ok {
 		t.Fatal("an empty id must not resolve")
 	}
+
+	expiring := newSessionStore(40 * time.Millisecond)
+	shortLived, err := expiring.Create(adminUserName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(80 * time.Millisecond)
-	if _, ok := store.Get(session.ID); ok {
+	if _, ok := expiring.Get(shortLived.ID); ok {
 		t.Fatal("an expired session must not resolve")
 	}
 
@@ -232,10 +238,18 @@ func TestSessionLifecycle(t *testing.T) {
 	if _, ok := store.Get(live.ID); ok {
 		t.Fatal("a deleted session must not resolve")
 	}
-	again, _ := store.Create(adminUserName)
-	store.DeleteAll()
-	if _, ok := store.Get(again.ID); ok {
-		t.Fatal("DeleteAll must invalidate every session")
+	// A session created before a credential rotation is no longer trusted.
+	older, _ := store.Create(adminUserName)
+	time.Sleep(5 * time.Millisecond)
+	cutoff := time.Now()
+	time.Sleep(5 * time.Millisecond)
+	newer, _ := store.Create(adminUserName)
+	store.DeleteBefore(cutoff)
+	if _, ok := store.Get(older.ID); ok {
+		t.Fatal("a session created before the rotation must be invalidated")
+	}
+	if _, ok := store.Get(newer.ID); !ok {
+		t.Fatal("a session created after the rotation must survive")
 	}
 }
 

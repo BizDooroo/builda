@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -58,25 +59,56 @@ type credentialFile struct {
 	AgentTokens []TokenRecord   `json:"agent_tokens,omitempty"`
 }
 
-// AuthStore owns the protected credential file.
+// maxCredentialFileBytes bounds how much the controller will read from the
+// credential file, so a corrupt or hostile file cannot exhaust memory.
+const maxCredentialFileBytes = 4 << 20
+
+// AuthStore owns the protected credential file. The file is the authority, not
+// the in-memory copy: the CLI writes it from a separate process, so every
+// read and every write re-reads it first. Without that, a token revoked with
+// the CLI would keep working until the controller restarted, and the next
+// controller-side write would resurrect it from the stale copy.
 type AuthStore struct {
-	mu   sync.Mutex
-	path string
-	data credentialFile
+	mu    sync.Mutex
+	path  string
+	data  credentialFile
+	stamp fileStamp
 }
 
 func newAuthStore(path string) (*AuthStore, error) {
 	store := &AuthStore{path: path, data: credentialFile{Version: 1}}
-	if err := store.load(); err != nil {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.reloadLocked(); err != nil {
 		return nil, err
 	}
 	return store, nil
 }
 
-func (a *AuthStore) load() error {
+// reloadLocked re-reads the credential file when it changed on disk. A read
+// error is reported rather than swallowed, so a verification never silently
+// falls back to a stale document.
+func (a *AuthStore) reloadLocked() error {
+	stamp, err := statFileStamp(a.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			a.data = credentialFile{Version: 1}
+			a.stamp = fileStamp{}
+			return nil
+		}
+		return err
+	}
+	if stamp.equal(a.stamp) && a.stamp != (fileStamp{}) {
+		return nil
+	}
+	if stamp.size > maxCredentialFileBytes {
+		return fmt.Errorf("credential file %s is %d bytes, which exceeds the %d byte limit", a.path, stamp.size, maxCredentialFileBytes)
+	}
 	data, err := os.ReadFile(a.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			a.data = credentialFile{Version: 1}
+			a.stamp = fileStamp{}
 			return nil
 		}
 		return err
@@ -89,22 +121,76 @@ func (a *AuthStore) load() error {
 		parsed.Version = 1
 	}
 	a.data = parsed
+	a.stamp = stamp
 	return nil
 }
 
-func (a *AuthStore) saveLocked() error {
-	encoded, err := json.MarshalIndent(a.data, "", "  ")
+// mutate re-reads the file, applies the change, and writes it back, so a
+// concurrent CLI edit is never clobbered by a stale in-memory document.
+func (a *AuthStore) mutate(fn func(data *credentialFile) error) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.reloadLocked(); err != nil {
+		return err
+	}
+	next := a.data.clone()
+	if err := fn(&next); err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileAtomicSync(a.path, encoded, 0o600)
+	if err := writeFileAtomicSync(a.path, encoded, 0o600); err != nil {
+		return err
+	}
+	a.data = next
+	a.stamp, _ = statFileStamp(a.path)
+	return nil
+}
+
+// read re-reads the file and hands the callback the current document.
+func (a *AuthStore) read(fn func(data credentialFile)) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.reloadLocked(); err != nil {
+		return err
+	}
+	fn(a.data)
+	return nil
+}
+
+func (d credentialFile) clone() credentialFile {
+	next := credentialFile{Version: d.Version}
+	if d.Admin != nil {
+		admin := *d.Admin
+		next.Admin = &admin
+	}
+	next.APITokens = append([]TokenRecord(nil), d.APITokens...)
+	next.AgentTokens = append([]TokenRecord(nil), d.AgentTokens...)
+	return next
 }
 
 // HasAdmin reports whether local bootstrap has already happened.
 func (a *AuthStore) HasAdmin() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.data.Admin != nil
+	present := false
+	if err := a.read(func(data credentialFile) { present = data.Admin != nil }); err != nil {
+		return false
+	}
+	return present
+}
+
+// AdminUpdatedAt reports when the admin credential last changed. Sessions
+// created before that are no longer trusted, which is how a password rotation
+// made with the CLI invalidates browser sessions in a running controller.
+func (a *AuthStore) AdminUpdatedAt() time.Time {
+	var updated time.Time
+	_ = a.read(func(data credentialFile) {
+		if data.Admin != nil {
+			updated = data.Admin.UpdatedAt
+		}
+	})
+	return updated
 }
 
 // SetAdminPassword creates or rotates the single admin credential.
@@ -124,23 +210,29 @@ func (a *AuthStore) SetAdminPassword(username, password string) error {
 	if err != nil {
 		return err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.data.Admin = &PasswordRecord{
-		Username:   username,
-		Salt:       hex.EncodeToString(salt),
-		Hash:       hex.EncodeToString(hash),
-		Iterations: passwordIterations,
-		UpdatedAt:  time.Now(),
-	}
-	return a.saveLocked()
+	return a.mutate(func(data *credentialFile) error {
+		data.Admin = &PasswordRecord{
+			Username:   username,
+			Salt:       hex.EncodeToString(salt),
+			Hash:       hex.EncodeToString(hash),
+			Iterations: passwordIterations,
+			UpdatedAt:  time.Now(),
+		}
+		return nil
+	})
 }
 
 // VerifyPassword checks a login attempt in constant time.
 func (a *AuthStore) VerifyPassword(username, password string) error {
-	a.mu.Lock()
-	record := a.data.Admin
-	a.mu.Unlock()
+	var record *PasswordRecord
+	if err := a.read(func(data credentialFile) {
+		if data.Admin != nil {
+			copied := *data.Admin
+			record = &copied
+		}
+	}); err != nil {
+		return err
+	}
 	if record == nil {
 		return errNoAdminCredential
 	}
@@ -197,21 +289,21 @@ func (a *AuthStore) issueToken(name, agentID string) (string, TokenRecord, error
 		Hash:      hashToken(secret),
 		CreatedAt: time.Now(),
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if agentID != "" {
-		// Rotation replaces the previous token for the same agent identity.
-		kept := a.data.AgentTokens[:0]
-		for _, existing := range a.data.AgentTokens {
-			if existing.AgentID != agentID {
-				kept = append(kept, existing)
+	if err := a.mutate(func(data *credentialFile) error {
+		if agentID != "" {
+			// Rotation replaces the previous token for the same identity.
+			kept := make([]TokenRecord, 0, len(data.AgentTokens))
+			for _, existing := range data.AgentTokens {
+				if existing.AgentID != agentID {
+					kept = append(kept, existing)
+				}
 			}
+			data.AgentTokens = append(kept, record)
+			return nil
 		}
-		a.data.AgentTokens = append(kept, record)
-	} else {
-		a.data.APITokens = append(a.data.APITokens, record)
-	}
-	if err := a.saveLocked(); err != nil {
+		data.APITokens = append(data.APITokens, record)
+		return nil
+	}); err != nil {
 		return "", TokenRecord{}, err
 	}
 	return secret, record, nil
@@ -219,94 +311,109 @@ func (a *AuthStore) issueToken(name, agentID string) (string, TokenRecord, error
 
 // RevokeAPIToken removes one automation token by ID.
 func (a *AuthStore) RevokeAPIToken(id string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	kept := make([]TokenRecord, 0, len(a.data.APITokens))
-	found := false
-	for _, token := range a.data.APITokens {
-		if token.ID == id {
-			found = true
-			continue
+	return a.mutate(func(data *credentialFile) error {
+		kept := make([]TokenRecord, 0, len(data.APITokens))
+		found := false
+		for _, token := range data.APITokens {
+			if token.ID == id {
+				found = true
+				continue
+			}
+			kept = append(kept, token)
 		}
-		kept = append(kept, token)
-	}
-	if !found {
-		return errTokenNotFound
-	}
-	a.data.APITokens = kept
-	return a.saveLocked()
+		if !found {
+			return errTokenNotFound
+		}
+		data.APITokens = kept
+		return nil
+	})
 }
 
 // RevokeAgentToken removes the token of one agent identity.
 func (a *AuthStore) RevokeAgentToken(agentID string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	kept := make([]TokenRecord, 0, len(a.data.AgentTokens))
-	found := false
-	for _, token := range a.data.AgentTokens {
-		if token.AgentID == agentID {
-			found = true
-			continue
+	return a.mutate(func(data *credentialFile) error {
+		kept := make([]TokenRecord, 0, len(data.AgentTokens))
+		found := false
+		for _, token := range data.AgentTokens {
+			if token.AgentID == agentID {
+				found = true
+				continue
+			}
+			kept = append(kept, token)
 		}
-		kept = append(kept, token)
-	}
-	if !found {
-		return errTokenNotFound
-	}
-	a.data.AgentTokens = kept
-	return a.saveLocked()
+		if !found {
+			return errTokenNotFound
+		}
+		data.AgentTokens = kept
+		return nil
+	})
 }
 
 // VerifyAPIToken matches a bearer token against the automation token list.
 func (a *AuthStore) VerifyAPIToken(secret string) (TokenRecord, bool) {
 	hash := hashToken(secret)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, token := range a.data.APITokens {
-		if subtle.ConstantTimeCompare([]byte(token.Hash), []byte(hash)) == 1 {
-			return token, true
+	var found TokenRecord
+	matched := false
+	if err := a.read(func(data credentialFile) {
+		for _, token := range data.APITokens {
+			if subtle.ConstantTimeCompare([]byte(token.Hash), []byte(hash)) == 1 {
+				found, matched = token, true
+				return
+			}
 		}
+	}); err != nil {
+		// A credential file that cannot be read authenticates nobody.
+		log.Printf("read credentials: %v", err)
+		return TokenRecord{}, false
 	}
-	return TokenRecord{}, false
+	return found, matched
 }
 
 // VerifyAgentToken resolves a bearer token to exactly one agent identity.
 func (a *AuthStore) VerifyAgentToken(secret string) (TokenRecord, bool) {
 	hash := hashToken(secret)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, token := range a.data.AgentTokens {
-		if subtle.ConstantTimeCompare([]byte(token.Hash), []byte(hash)) == 1 {
-			return token, true
+	var found TokenRecord
+	matched := false
+	if err := a.read(func(data credentialFile) {
+		for _, token := range data.AgentTokens {
+			if subtle.ConstantTimeCompare([]byte(token.Hash), []byte(hash)) == 1 {
+				found, matched = token, true
+				return
+			}
 		}
+	}); err != nil {
+		log.Printf("read credentials: %v", err)
+		return TokenRecord{}, false
 	}
-	return TokenRecord{}, false
+	return found, matched
 }
 
 // APITokens returns token metadata without any verifier material.
 func (a *AuthStore) APITokens() []TokenRecord {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return redactTokens(a.data.APITokens)
+	var tokens []TokenRecord
+	_ = a.read(func(data credentialFile) { tokens = redactTokens(data.APITokens) })
+	return tokens
 }
 
 // AgentTokens returns agent token metadata without any verifier material.
 func (a *AuthStore) AgentTokens() []TokenRecord {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return redactTokens(a.data.AgentTokens)
+	var tokens []TokenRecord
+	_ = a.read(func(data credentialFile) { tokens = redactTokens(data.AgentTokens) })
+	return tokens
 }
 
 // HasAgentToken reports whether an agent identity has been enrolled.
 func (a *AuthStore) HasAgentToken(agentID string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, token := range a.data.AgentTokens {
-		if token.AgentID == agentID {
-			return true
+	enrolled := false
+	_ = a.read(func(data credentialFile) {
+		for _, token := range data.AgentTokens {
+			if token.AgentID == agentID {
+				enrolled = true
+				return
+			}
 		}
-	}
-	return false
+	})
+	return enrolled
 }
 
 func redactTokens(tokens []TokenRecord) []TokenRecord {

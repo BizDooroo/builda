@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -275,4 +277,55 @@ func TestAPITokenManagementEndpoints(t *testing.T) {
 	}
 	requireStatus(t, request(t, api, session, http.MethodDelete, "/api/tokens/"+issued.ID, nil), http.StatusOK)
 	requireStatus(t, request(t, api, session, http.MethodDelete, "/api/tokens/"+issued.ID, nil), http.StatusNotFound)
+}
+
+// TestConfigDocumentAcceptsRawYAMLWholly is the regression guard for a body
+// read that consumed part of the document into a JSON decoder buffer and then
+// handed only the remaining tail to the YAML parser, which could install a
+// silently truncated config.
+func TestConfigDocumentAcceptsRawYAMLWholly(t *testing.T) {
+	api, controller := newTestAPI(t, testControllerConfig)
+	session := adminSession(t, api)
+
+	// A document comfortably larger than any decoder buffer.
+	var builder strings.Builder
+	builder.WriteString("role: controller\njobs:\n")
+	for i := 0; i < 60; i++ {
+		builder.WriteString(fmt.Sprintf("  - id: \"job-%02d\"\n    description: \"%s\"\n    script: \"echo %d\"\n",
+			i, strings.Repeat("padding ", 12), i))
+	}
+	document := builder.String()
+	if len(document) < 4096 {
+		t.Fatalf("the fixture must exceed a decoder buffer, got %d bytes", len(document))
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(document))
+	req.Header.Set("Content-Type", "application/yaml")
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.ID})
+	req.Header.Set(csrfHeaderName, session.CSRF)
+	recorder := httptest.NewRecorder()
+	api.routes().ServeHTTP(recorder, req)
+	requireStatus(t, recorder, http.StatusOK)
+
+	cfg := controller.Config()
+	if len(cfg.Jobs) != 60 {
+		t.Fatalf("the whole document must be applied, got %d jobs", len(cfg.Jobs))
+	}
+	for _, id := range []string{"job-00", "job-30", "job-59"} {
+		if _, ok := findJob(cfg, id); !ok {
+			t.Fatalf("job %q was lost, so the body was truncated", id)
+		}
+	}
+
+	// An empty body and an oversized one are refused rather than guessed at.
+	requireStatus(t, request(t, api, session, http.MethodPost, "/api/config",
+		map[string]string{"content": ""}), http.StatusBadRequest)
+
+	oversized := strings.Repeat("a", maxConfigDocumentBytes+1)
+	req = httptest.NewRequest(http.MethodPost, "/api/config", strings.NewReader(oversized))
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.ID})
+	req.Header.Set(csrfHeaderName, session.CSRF)
+	recorder = httptest.NewRecorder()
+	api.routes().ServeHTTP(recorder, req)
+	requireStatus(t, recorder, http.StatusRequestEntityTooLarge)
 }
