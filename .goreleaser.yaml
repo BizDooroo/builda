@@ -31,7 +31,9 @@ archives:
     files:
       - README.md
       - LICENSE
-      - config.yaml
+      - examples/controller.yaml
+      - examples/agent.yaml
+      - examples/standalone-legacy.yaml
 
 checksum:
   name_template: "checksums.txt"
