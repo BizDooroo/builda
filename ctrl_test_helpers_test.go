@@ -329,3 +329,12 @@ func requestWithCanceledContext(t *testing.T, api *ControllerAPI, session *Sessi
 	}
 	return recorder
 }
+
+// jsonUnmarshal and jsonMarshalIndent keep the state-shape tests readable.
+func jsonUnmarshal(data []byte, target any) error {
+	return json.Unmarshal(data, target)
+}
+
+func jsonMarshalIndent(value any) ([]byte, error) {
+	return json.MarshalIndent(value, "", "  ")
+}

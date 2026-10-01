@@ -133,7 +133,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 `builda serve` is the deprecated standalone role, kept so an existing installation can keep running while its history moves across. It no longer serves a Web UI; its JSON API stays available.
 
-Every `builda migrate` subcommand reports what it would do and changes nothing until `--apply` is passed, and the legacy installation is only ever read. See `builda migrate --help` for the export, plan, config, and import steps, and for the rollback procedure.
+Every `builda migrate` subcommand reports what it would do and changes nothing until `--apply` is passed, and the legacy installation is only ever read. Run `migrate import` against a stopped controller: the state snapshot has a single writer.
+
+An import is all-or-nothing, and each imported legacy run is recorded in a durable ledger keyed by machine and legacy run ID, so repeating an import stays a no-op even after the history cap or an operator has removed the run it produced. See `builda migrate --help` for the export, plan, config, and import steps, and for the rollback procedure.
 
 ## Running as a user daemon
 

@@ -82,8 +82,35 @@ func (s *ControllerStore) load() error {
 			execution.LogOffset = size
 		}
 	}
+	backfillImportedOrigins(&loaded)
 	s.data = loaded
 	return nil
+}
+
+// backfillImportedOrigins reconstructs the ledger from retained executions.
+// Snapshots written before the ledger existed carry the origin only on the
+// execution, so this keeps a repeated import a no-op after an upgrade.
+func backfillImportedOrigins(st *controllerStateData) {
+	known := make(map[originKey]bool, len(st.ImportedOrigins))
+	for _, origin := range st.ImportedOrigins {
+		known[origin.key()] = true
+	}
+	for _, execution := range st.Executions {
+		if execution == nil || execution.Origin == nil {
+			continue
+		}
+		key := originKey{Machine: execution.Origin.Machine, LegacyRunID: execution.Origin.LegacyRunID}
+		if key.Machine == "" || key.LegacyRunID == "" || known[key] {
+			continue
+		}
+		known[key] = true
+		st.ImportedOrigins = append(st.ImportedOrigins, ImportedOrigin{
+			Machine:     key.Machine,
+			LegacyRunID: key.LegacyRunID,
+			ExecutionID: execution.ID,
+			ImportedAt:  execution.Origin.ImportedAt,
+		})
+	}
 }
 
 // Subscribe returns a channel closed on the next committed mutation.
@@ -158,24 +185,6 @@ func (s *ControllerStore) Find(id string) (*Execution, bool) {
 	return found, found != nil
 }
 
-// FindByOrigin locates a previously imported execution so migration stays
-// idempotent for the same source machine and legacy run ID.
-func (s *ControllerStore) FindByOrigin(machine, legacyRunID string) (*Execution, bool) {
-	var found *Execution
-	s.read(func(st *controllerStateData) {
-		for _, execution := range st.Executions {
-			if execution == nil || execution.Origin == nil {
-				continue
-			}
-			if execution.Origin.Machine == machine && execution.Origin.LegacyRunID == legacyRunID {
-				found = execution.clone()
-				return
-			}
-		}
-	})
-	return found, found != nil
-}
-
 // Executions returns copies of all executions, newest request first.
 func (s *ControllerStore) Executions() []*Execution {
 	var list []*Execution
@@ -218,6 +227,26 @@ func (s *ControllerStore) AgentStates() map[string]*AgentState {
 		}
 	})
 	return states
+}
+
+// HasImportedOrigin reports whether a legacy run has already been imported.
+// It consults the ledger, so pruning the history or deleting the run it
+// produced does not make it importable again.
+func (s *ControllerStore) HasImportedOrigin(machine, legacyRunID string) bool {
+	found := false
+	s.read(func(st *controllerStateData) {
+		found = st.hasOrigin(originKey{Machine: machine, LegacyRunID: legacyRunID})
+	})
+	return found
+}
+
+// ImportedOrigins returns a copy of the ledger.
+func (s *ControllerStore) ImportedOrigins() []ImportedOrigin {
+	var origins []ImportedOrigin
+	s.read(func(st *controllerStateData) {
+		origins = append([]ImportedOrigin(nil), st.ImportedOrigins...)
+	})
+	return origins
 }
 
 // SetLogOffset records the durable log offset for display. The log file

@@ -187,16 +187,31 @@ is passed. The legacy installation is only ever read.
        builda migrate config --bundle ./bundle-linux --map ./bundle-linux/mapping.yaml \
          --bundle ./bundle-mm --map ./bundle-mm/mapping.yaml --out-dir ./new --apply
 
-  4. Import history into the controller:
+  4. Import history into the controller. Run this while the controller is
+     stopped: the state snapshot has a single writer, so importing into a
+     running controller would race it.
 
+       builda controller service stop
        builda migrate import --bundle ./bundle-linux \
          --map ./bundle-linux/mapping.yaml --config ./new/controller.yaml --apply
 
-     Imported executions get new IDs, keep the original machine and legacy run
-     ID for idempotency, and store the original task snapshot, name, inputs,
-     and timeout. Log files are copied under the new execution ID. A missing
-     log is reported as a diagnostic and the run is still imported without one.
-     Only terminal legacy runs are imported, so an import can never queue work.
+     Imported executions get new IDs and store the original task snapshot,
+     name, inputs, and timeout. Log files are copied under the new execution
+     ID, derived from the legacy run ID alone rather than from any path inside
+     the bundle. A missing log is reported as a diagnostic and the run is
+     still imported without one. Only terminal legacy runs are imported, so an
+     import can never queue work.
+
+     An import is all-or-nothing: every log is copied and flushed before any
+     state is committed, and a failure removes what that attempt created, so
+     retrying after fixing the cause simply works.
+
+     Each imported legacy run is recorded in a durable ledger keyed by machine
+     and legacy run ID. Repeating an import is a no-op even after the run it
+     produced has been pruned by the history cap or deleted by an operator;
+     such a run is reported as already imported and is not recreated. An
+     import that does not fit under server.max_history is refused with the
+     value to raise it to, rather than pruning live history to make room.
 
   5. Install and start the new services, then verify before retiring the old
      one:

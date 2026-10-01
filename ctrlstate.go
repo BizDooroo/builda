@@ -93,12 +93,34 @@ type AgentState struct {
 	LastAssignedAt time.Time `json:"last_assigned_at,omitempty"`
 }
 
+// ImportedOrigin records that one legacy run has already been imported. The
+// ledger is deliberately independent of the executions: history is pruned and
+// runs are deleted, and neither may let a legacy run be imported twice.
+type ImportedOrigin struct {
+	Machine     string    `json:"machine"`
+	LegacyRunID string    `json:"legacy_run_id"`
+	ExecutionID string    `json:"execution_id"`
+	ImportedAt  time.Time `json:"imported_at"`
+}
+
+// originKey identifies a legacy run. It is a struct rather than a joined
+// string so no pair of machine and run ID can collide with another pair.
+type originKey struct {
+	Machine     string
+	LegacyRunID string
+}
+
+func (o ImportedOrigin) key() originKey {
+	return originKey{Machine: o.Machine, LegacyRunID: o.LegacyRunID}
+}
+
 // controllerStateData is the single JSON snapshot persisted atomically.
 type controllerStateData struct {
-	Version    int                    `json:"version"`
-	Sequence   uint64                 `json:"sequence"`
-	Executions []*Execution           `json:"executions"`
-	Agents     map[string]*AgentState `json:"agents"`
+	Version         int                    `json:"version"`
+	Sequence        uint64                 `json:"sequence"`
+	Executions      []*Execution           `json:"executions"`
+	Agents          map[string]*AgentState `json:"agents"`
+	ImportedOrigins []ImportedOrigin       `json:"imported_origins,omitempty"`
 }
 
 func (e *Execution) clone() *Execution {
@@ -143,7 +165,19 @@ func (d controllerStateData) clone() controllerStateData {
 	for id, agent := range d.Agents {
 		next.Agents[id] = agent.clone()
 	}
+	next.ImportedOrigins = append([]ImportedOrigin(nil), d.ImportedOrigins...)
 	return next
+}
+
+// hasOrigin reports whether a legacy run was already imported, whatever became
+// of the execution it produced.
+func (d *controllerStateData) hasOrigin(key originKey) bool {
+	for _, origin := range d.ImportedOrigins {
+		if origin.key() == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *controllerStateData) find(id string) *Execution {

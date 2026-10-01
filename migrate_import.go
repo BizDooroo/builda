@@ -17,38 +17,92 @@ type importReport struct {
 	Diagnostics []string
 }
 
-// errHistoryCapTooSmall stops an import that the controller's terminal history
-// cap would silently truncate.
-var errHistoryCapTooSmall = errors.New("controller history cap is too small for this import")
+var (
+	// errHistoryCapTooSmall stops an import the terminal history cap cannot
+	// hold. Letting it through would prune the controller's own oldest runs
+	// and their logs, which is both data loss and a source of re-imports.
+	errHistoryCapTooSmall = errors.New("controller history cap is too small for this import")
+	// errImportLogCopy reports a log that could not be staged. Nothing is
+	// committed when it happens, so the import can simply be retried.
+	errImportLogCopy = errors.New("import log copy failed")
+)
 
-// importBundle writes legacy history into a controller state store. It never
-// enqueues work: only terminal legacy runs are imported, and each imported
-// execution keeps its original machine and run ID so repeating the import is
-// idempotent. Log files are copied under the new execution ID; a missing log
-// is reported explicitly instead of being inferred from any path in the
-// bundle.
+// plannedImport is one legacy run resolved against the current controller
+// configuration, together with the bundle log that belongs to it.
+type plannedImport struct {
+	Execution *Execution
+	LogSource string
+}
+
+// importBundle writes legacy history into a controller. It never enqueues
+// work: only terminal legacy runs are imported. Each import is recorded in a
+// durable ledger keyed by machine and legacy run ID, so repeating it is a
+// no-op even after the execution it produced has been pruned or deleted.
+//
+// The import is all-or-nothing. Every log is copied under its new execution
+// ID and flushed before any state is committed; if a copy fails, or the state
+// cannot be persisted, the files this import created are removed and nothing
+// is recorded, so a retry starts from a clean slate.
 func importBundle(controller *Controller, bundle *MigrationBundle, mapping *MigrationMapping, bundleDir string, apply bool) (importReport, error) {
 	report := importReport{Diagnostics: []string{}}
+	planned, err := planImports(controller, bundle, mapping, bundleDir, &report)
+	if err != nil {
+		return report, err
+	}
+
+	if len(planned) == 0 {
+		// Nothing to do, so the snapshot is left completely alone: no
+		// mutation means no prune and no rewrite.
+		if !apply {
+			report.Diagnostics = append(report.Diagnostics, importDryRunSummary(report))
+		}
+		return report, nil
+	}
+	if err := checkHistoryHeadroom(controller, len(planned), &report); err != nil {
+		return report, err
+	}
+	if !apply {
+		report.Diagnostics = append(report.Diagnostics, importDryRunSummary(report))
+		return report, nil
+	}
+	return applyImports(controller, bundle, planned, report)
+}
+
+// planImports resolves every legacy run against the current configuration.
+func planImports(controller *Controller, bundle *MigrationBundle, mapping *MigrationMapping, bundleDir string, report *importReport) ([]plannedImport, error) {
 	cfg := controller.Config()
-	logDir := controller.Runtime().LogDir
-
 	runs := append([]LegacyRun(nil), bundle.Runs...)
-	sort.SliceStable(runs, func(i, j int) bool { return runs[i].RequestedAt.Before(runs[j].RequestedAt) })
+	sort.SliceStable(runs, func(i, j int) bool {
+		if runs[i].RequestedAt.Equal(runs[j].RequestedAt) {
+			return runs[i].ID < runs[j].ID
+		}
+		return runs[i].RequestedAt.Before(runs[j].RequestedAt)
+	})
 
-	// Imported executions are terminal, so they compete with the controller's
-	// own history for the terminal cap. Appending past the cap would prune the
-	// oldest entries and their logs, which would both lose history and make a
-	// repeated import non-idempotent, so refuse with an actionable number.
-	pending := make([]*Execution, 0, len(runs))
-	logSources := map[string]string{}
+	planned := make([]plannedImport, 0, len(runs))
+	taken := map[string]bool{}
+	for _, execution := range controller.store.Executions() {
+		taken[execution.ID] = true
+	}
+	seen := map[originKey]bool{}
 
 	for _, run := range runs {
+		key := originKey{Machine: bundle.Machine, LegacyRunID: run.ID}
+		if seen[key] {
+			// A bundle that lists one legacy run twice is skipped
+			// deterministically: the first occurrence in the sorted order wins.
+			report.Skipped++
+			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("skip duplicate entry for legacy run %s in this bundle", run.ID))
+			continue
+		}
+		seen[key] = true
+
 		if !isTerminal(run.Status) {
 			report.Skipped++
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("skip %s: status %s is not terminal, so it is never imported and never queued", run.ID, run.Status))
 			continue
 		}
-		if _, exists := controller.store.FindByOrigin(bundle.Machine, run.ID); exists {
+		if controller.store.HasImportedOrigin(bundle.Machine, run.ID) {
 			report.Existing++
 			continue
 		}
@@ -70,46 +124,96 @@ func importBundle(controller *Controller, bundle *MigrationBundle, mapping *Migr
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("skip %s: %v", run.ID, err))
 			continue
 		}
-		note, imported := importedLogNote(bundleDir, run)
-		execution.Origin.LogImported = imported
+		for taken[execution.ID] {
+			execution.ID = newExecutionID()
+		}
+		taken[execution.ID] = true
+
+		source, note := importedLogSource(bundleDir, run)
+		execution.Origin.LogImported = source != ""
 		execution.Origin.LogNote = note
 		if note != "" {
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("%s: %s", run.ID, note))
 		}
-		pending = append(pending, execution)
-		if imported {
-			logSources[execution.ID] = filepath.Join(bundleDir, bundleLogDir, filepath.Base(run.ID)+".log")
-		}
+		planned = append(planned, plannedImport{Execution: execution, LogSource: source})
 		report.Imported++
 	}
+	return planned, nil
+}
 
-	if err := checkHistoryHeadroom(controller, len(pending), &report); err != nil {
+// applyImports copies every log and then commits the batch. Anything this
+// import created is removed when either step fails.
+func applyImports(controller *Controller, bundle *MigrationBundle, planned []plannedImport, report importReport) (importReport, error) {
+	logDir := controller.Runtime().LogDir
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
 		return report, err
 	}
-	if !apply {
-		report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("dry run: would import %d executions, skip %d, leave %d already imported", report.Imported, report.Skipped, report.Existing))
-		return report, nil
+
+	created := make([]string, 0, len(planned))
+	cleanup := func() {
+		for _, path := range created {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("could not remove staged log %s: %v", path, err))
+			}
+		}
 	}
 
-	// One mutation keeps the import atomic: either the whole batch lands or
-	// the controller state is untouched.
-	if err := controller.store.mutate(func(st *controllerStateData) error {
-		for _, execution := range pending {
-			for st.find(execution.ID) != nil {
-				execution.ID = newExecutionID()
+	for _, item := range planned {
+		if item.LogSource == "" {
+			continue
+		}
+		target := executionLogPath(logDir, item.Execution.ID)
+		// copyFile writes through the durable path, so the bytes are flushed
+		// before any state references them. The source is only ever read.
+		if err := copyFile(item.LogSource, target); err != nil {
+			cleanup()
+			return report, fmt.Errorf("%w: %s: %v", errImportLogCopy, item.Execution.Origin.LegacyRunID, err)
+		}
+		created = append(created, target)
+	}
+
+	now := time.Now().UTC()
+	maxHistory := normalizeMaxHistory(controller.Runtime().MaxHistory)
+	err := controller.store.mutate(func(st *controllerStateData) error {
+		for _, item := range planned {
+			if st.find(item.Execution.ID) != nil {
+				return fmt.Errorf("execution id %s is already in use", item.Execution.ID)
 			}
-			st.Executions = append(st.Executions, execution.clone())
+			key := originKey{Machine: bundle.Machine, LegacyRunID: item.Execution.Origin.LegacyRunID}
+			if st.hasOrigin(key) {
+				return fmt.Errorf("legacy run %s was imported concurrently", key.LegacyRunID)
+			}
+			st.Executions = append(st.Executions, item.Execution.clone())
+			st.ImportedOrigins = append(st.ImportedOrigins, ImportedOrigin{
+				Machine:     key.Machine,
+				LegacyRunID: key.LegacyRunID,
+				ExecutionID: item.Execution.ID,
+				ImportedAt:  now,
+			})
+		}
+		// Refuse inside the transaction too, so a run that finished since the
+		// headroom check cannot make the commit prune live history.
+		terminal := 0
+		for _, execution := range st.Executions {
+			if execution != nil && isExecutionTerminal(execution.Status) {
+				terminal++
+			}
+		}
+		if terminal > maxHistory {
+			return fmt.Errorf("%w: the import would leave %d terminal executions, above server.max_history=%d", errHistoryCapTooSmall, terminal, maxHistory)
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
+		cleanup()
 		return report, err
 	}
-	for id, source := range logSources {
-		if err := copyFile(source, executionLogPath(logDir, id)); err != nil {
-			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("%s: copy log failed: %v", id, err))
-		}
-	}
 	return report, nil
+}
+
+func importDryRunSummary(report importReport) string {
+	return fmt.Sprintf("dry run: would import %d executions, skip %d, leave %d already imported",
+		report.Imported, report.Skipped, report.Existing)
 }
 
 // checkHistoryHeadroom refuses an import the terminal history cap cannot hold.
@@ -155,8 +259,7 @@ func buildImportedExecution(cfg ControllerConfig, job JobConfig, bundle *Migrati
 		values[target] = value
 	}
 
-	query := parameterValuesToQuery(values)
-	resolved, err := resolveParameters(cfg, job, query)
+	resolved, err := resolveParameters(cfg, job, parameterValuesToQuery(values))
 	if err != nil {
 		return nil, fmt.Errorf("mapped parameters do not match job %q: %w", job.ID, err)
 	}
@@ -211,17 +314,16 @@ func findLegacyTask(bundle *MigrationBundle, id string) *TaskConfig {
 	return nil
 }
 
-// importedLogNote checks the bundle's own log directory for the run's log. The
-// log path recorded in the bundle is never trusted as a filesystem path; only
-// the legacy run ID is used to derive it.
-func importedLogNote(bundleDir string, run LegacyRun) (string, bool) {
+// importedLogSource locates a run's log inside the bundle. The path recorded
+// in the bundle is never trusted; only the legacy run ID is used to derive it.
+func importedLogSource(bundleDir string, run LegacyRun) (string, string) {
 	source := filepath.Join(bundleDir, bundleLogDir, filepath.Base(run.ID)+".log")
 	info, err := os.Stat(source)
 	if err != nil {
-		return "no log file for legacy run " + run.ID + " in the bundle; the imported run keeps its metadata without a log", false
+		return "", "no log file for legacy run " + run.ID + " in the bundle; the imported run keeps its metadata without a log"
 	}
 	if !info.Mode().IsRegular() {
-		return "bundle log entry for " + run.ID + " is not a regular file and was not imported", false
+		return "", "bundle log entry for " + run.ID + " is not a regular file and was not imported"
 	}
-	return "", true
+	return source, ""
 }
