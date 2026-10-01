@@ -48,15 +48,15 @@ function bindControls() {
 
   const query = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   query?.addEventListener?.("change", () => {
-    if (currentTheme === "system") {
-      document.documentElement.dataset.theme = "system";
-    }
+    if (currentTheme === "system") applyTheme(currentTheme, false);
   });
 }
 
 function applyTheme(theme, persist) {
   currentTheme = theme;
   document.documentElement.dataset.theme = theme;
+  const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches || false;
+  document.documentElement.dataset.colorScheme = theme === "dark" || (theme === "system" && systemDark) ? "dark" : "light";
   if (persist) storageSet(THEME_KEY, theme);
   updateButtons();
 }

@@ -3,7 +3,7 @@ import AppShell from "../../layouts/AppShell.astro";
 ---
 
 <AppShell title="Queue · Builda" active="queue">
-  <main class="workspace">
+  <main id="main-content" class="workspace">
     <div id="queue-status" class="notice" role="status" aria-live="polite" hidden></div>
     <section class="page-heading">
       <div class="page-heading-copy">
@@ -23,16 +23,16 @@ import AppShell from "../../layouts/AppShell.astro";
           <h2 data-i18n="queue.active">실행 중</h2>
         </div>
       </div>
-      <div id="active" class="record-list"></div>
+      <div id="active" class="record-list" aria-busy="true"><div class="empty" data-i18n="common.loading">불러오는 중</div></div>
     </section>
 
     <section class="panel">
       <div class="panel-head">
         <div class="panel-title">
-          <h2 data-i18n="queue.title">큐</h2>
+          <h2 data-i18n="queue.waiting">대기 중</h2>
         </div>
       </div>
-      <div id="queue" class="record-list"></div>
+      <div id="queue" class="record-list" aria-busy="true"><div class="empty" data-i18n="common.loading">불러오는 중</div></div>
     </section>
   </main>
 

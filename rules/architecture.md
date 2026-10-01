@@ -42,6 +42,9 @@
 - A job that exceeds its timeout is reported as `FAILED` with the failure reason `timeout`.
 
 ## Web UI
+- Keep semantic colour tokens consistent across the shell and management screens. Scope text-input styles away from checkboxes and give clickable list rows their own layout and foreground/background styles instead of inheriting action-button styles.
+- Define scroll ownership and mobile navigation explicitly. Verify long names, selected rows, and narrow Korean/English layouts in both themes; synchronize repeater drafts before rebuilding their DOM so adding or removing an item cannot erase user input.
+- Outside-click handlers should use `event.composedPath()` when an inside handler can replace clicked descendants; `event.target` may be detached before the document listener runs.
 - The Web UI source lives under `web/` as an Astro static frontend. Go embeds only `web/dist/`; keep the built dist committed so `go install` needs no Node toolchain.
 - Give every shared script module its own output chunk. Letting the bundler merge shared modules makes the generated export order vary between builds and breaks the CI comparison against the committed dist.
 - Management screens are dedicated forms, not a raw YAML box. Keep the validated YAML editor as an escape hatch on the settings page.

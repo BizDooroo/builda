@@ -3,7 +3,7 @@ import AppShell from "../../layouts/AppShell.astro";
 ---
 
 <AppShell title="History · Builda" active="runs">
-  <main class="workspace runs-workspace">
+  <main id="main-content" class="workspace runs-workspace">
     <div id="runs-status" class="notice" role="status" aria-live="polite" hidden></div>
     <section class="page-heading">
       <div class="page-heading-copy">
@@ -12,7 +12,7 @@ import AppShell from "../../layouts/AppShell.astro";
         <p class="lead" data-i18n="runs.lead">기록을 걸러 보고 로그를 따라갑니다.</p>
       </div>
       <div class="toolbar">
-        <div id="run-count" class="meta">0 runs</div>
+        <div id="run-count" class="meta" aria-live="polite">0</div>
       </div>
     </section>
 
@@ -21,13 +21,18 @@ import AppShell from "../../layouts/AppShell.astro";
     </section>
 
     <div class="runs-layout">
-      <section class="panel">
+      <section class="panel run-list-panel" aria-label="Run list" data-i18n-aria-label="runs.timeline">
         <div class="panel-head">
           <div class="panel-title">
             <h2 data-i18n="runs.timeline">타임라인</h2>
           </div>
         </div>
-        <div id="runs" class="run-list"></div>
+        <div id="runs" class="run-list" aria-busy="true"><div class="empty" data-i18n="common.loading">불러오는 중</div></div>
+        <div class="run-pagination">
+          <button id="previous-runs" class="secondary compact" type="button" data-i18n="action.previous">이전</button>
+          <span id="run-page" class="meta" aria-live="polite">1 / 1</span>
+          <button id="next-runs" class="secondary compact" type="button" data-i18n="action.next">다음</button>
+        </div>
       </section>
 
       <section class="inspector">
@@ -39,10 +44,12 @@ import AppShell from "../../layouts/AppShell.astro";
             <h2 data-i18n="log.heading">로그</h2>
             <div class="toolbar">
               <button id="copy-log" class="secondary compact" type="button" data-i18n="action.copyLog">로그 복사</button>
-              <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow</button>
+              <button id="wrap-log" class="secondary compact" type="button" aria-pressed="true" data-i18n="log.wrapOn">줄바꿈 켜짐</button>
+              <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true" data-i18n="action.followOn">Follow 켜짐</button>
             </div>
           </div>
-          <pre id="log" tabindex="0">실행을 선택하면 로그가 표시됩니다.</pre>
+          <pre id="log" tabindex="0" aria-label="Log" data-i18n-aria-label="log.heading">실행을 선택하면 로그가 표시됩니다.</pre>
+          <div id="log-update" class="sr-only" role="status" aria-live="polite"></div>
         </div>
       </section>
     </div>

@@ -8,13 +8,20 @@ const list = document.getElementById("queue");
 const active = document.getElementById("active");
 const cancelSelected = document.getElementById("cancel-selected");
 const selection = new Set();
+let loading = false;
 
 async function load() {
+  if (loading) return;
+  loading = true;
   try {
     const response = await getJSON("/api/queue");
     render(response.queue || [], response.active || []);
   } catch (error) {
+    list?.setAttribute("aria-busy", "false");
+    active?.setAttribute("aria-busy", "false");
     showNotice(notice, t("notice.loadFailed", { error: error.message }), "error");
+  } finally {
+    loading = false;
   }
 }
 
@@ -39,7 +46,7 @@ function render(queue, running) {
       '<label class="form-check"><input type="checkbox" data-select="' + escapeHTML(run.id) + '"' + checked + " /> " +
       '<span class="queue-position">#' + entry.position + "</span> <strong>" +
       escapeHTML(run.job_name || run.job_id) + "</strong></label>" +
-      '<div class="meta">' + escapeHTML(run.id) + " · " + escapeHTML(formatTime(run.requested_at)) + "</div>" +
+      '<div class="meta"><span class="identifier">' + escapeHTML(run.id) + "</span> · " + escapeHTML(formatTime(run.requested_at)) + "</div>" +
       "</div><div class=\"record-actions\">" +
       '<span class="reason' + readyClass + '">' + escapeHTML(t("queue.reason")) + ": " + escapeHTML(reasonLabel(entry.reason)) + "</span>" +
       '<a class="button secondary compact" href="/runs/' + escapeHTML(run.id) + '">' + escapeHTML(t("action.viewRuns")) + "</a>" +
@@ -60,10 +67,10 @@ function render(queue, running) {
       '<div class="queue-entry">' +
       '<div class="record-head"><div class="record-title"><strong>' +
       escapeHTML(run.job_name || run.job_id) + "</strong>" +
-      '<div class="meta">' + escapeHTML(run.id) + " · " + escapeHTML(run.agent_id || "-") + "</div></div>" +
+      '<div class="meta"><span class="identifier">' + escapeHTML(run.id) + '</span> · <span class="identifier">' + escapeHTML(run.agent_id || "-") + "</span></div></div>" +
       '<div class="record-actions">' + renderStatusBadge(run.status) +
       '<a class="button secondary compact" href="/runs/' + escapeHTML(run.id) + '">' + escapeHTML(t("log.heading")) + "</a>" +
-      '<button type="button" class="danger compact" data-cancel="' + escapeHTML(run.id) + '">' + escapeHTML(t("action.cancel")) + "</button>" +
+      (run.status === "CANCELING" ? "" : '<button type="button" class="danger compact" data-cancel="' + escapeHTML(run.id) + '">' + escapeHTML(t("action.cancel")) + "</button>") +
       "</div></div>" +
       '<div class="param-list" aria-label="' + escapeHTML(t("params.aria")) + '">' + renderChips(run.parameters) + "</div>" +
       attention +
@@ -77,12 +84,15 @@ function render(queue, running) {
   applyTranslations(active);
 }
 
-async function cancelOne(id) {
+async function cancelOne(id, button) {
+  if (button) button.disabled = true;
   try {
     await postJSON("/api/runs/" + encodeURIComponent(id) + "/cancel", {});
     await load();
   } catch (error) {
     showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+  } finally {
+    if (button?.isConnected) button.disabled = false;
   }
 }
 
@@ -102,23 +112,39 @@ document.addEventListener("change", (event) => {
 document.addEventListener("click", async (event) => {
   const cancel = event.target.closest("[data-cancel]");
   if (cancel) {
-    await cancelOne(cancel.dataset.cancel);
+    await cancelOne(cancel.dataset.cancel, cancel);
   }
 });
 
 cancelSelected?.addEventListener("click", async () => {
   if (!selection.size) return;
+  cancelSelected.disabled = true;
   try {
-    await postJSON("/api/queue/cancel", { ids: Array.from(selection) });
+    const response = await postJSON("/api/queue/cancel", { ids: Array.from(selection) });
+    const outcomes = Object.entries(response.results || {});
+    const failed = outcomes.filter(([, result]) => result === "not-found" || result === "already-finished" || result.startsWith("error:"));
     selection.clear();
+    showNotice(
+      notice,
+      t("queue.cancelSummary", { count: outcomes.length, failures: failed.length }) +
+        (failed.length ? " · " + failed.map(([id, result]) => id + ": " + result).join("; ") : ""),
+      failed.length ? "error" : "ok",
+    );
     await load();
   } catch (error) {
     showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+  } finally {
+    cancelSelected.disabled = selection.size === 0;
   }
 });
 
 document.getElementById("refresh")?.addEventListener("click", load);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") load();
+});
 
 await initShell();
 await load();
-setInterval(load, 2000);
+setInterval(() => {
+  if (document.visibilityState === "visible") load();
+}, 2000);

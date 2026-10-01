@@ -75,7 +75,10 @@ export function renderChips(values) {
   if (!values || typeof values !== "object") return "";
   return Object.keys(values)
     .sort()
-    .map((key) => '<span class="chip param-chip">' + escapeHTML(key + "=" + (values[key] ?? "")) + "</span>")
+    .map((key) => {
+      const value = key + "=" + (values[key] ?? "");
+      return '<span class="chip param-chip" title="' + escapeHTML(value) + '">' + escapeHTML(value) + "</span>";
+    })
     .join("");
 }
 
@@ -85,12 +88,12 @@ export function renderLabels(labels) {
 }
 
 export function renderRunTimes(run) {
+  const active = isActiveStatus(run.status);
+  const hasStarted = hasTime(run.started_at);
+  const label = active ? (hasStarted ? "time.start" : "time.request") : "time.finished";
+  const value = active ? (hasStarted ? run.started_at : run.requested_at) : run.finished_at;
   return (
-    '<span class="run-time-grid">' +
-    "<span>" + escapeHTML(t("time.request")) + " " + formatTime(run.requested_at) + "</span>" +
-    "<span>" + escapeHTML(t("time.start")) + " " + formatTime(run.started_at) + "</span>" +
-    "<span>" + escapeHTML(t("time.elapsed")) + " " + formatElapsed(run) + "</span>" +
-    "<span>" + escapeHTML(t("time.duration")) + " " + formatDuration(run) + "</span>" +
+    '<span class="run-time-grid"><span>' + escapeHTML(t(label)) + " " + formatTime(value) + "</span>" +
     "</span>"
   );
 }
@@ -102,7 +105,7 @@ export function renderLogText(logText) {
     .join("");
 }
 
-function renderLogLine(line) {
+export function renderLogLine(line) {
   if (line === "") return '<span class="log-line"></span>';
   const match = line.match(/^(\[[^\]]+\]\s+)params\s+(.+)$/);
   if (match) {

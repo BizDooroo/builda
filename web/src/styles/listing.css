@@ -91,25 +91,39 @@
   background: var(--attention-subtle);
 }
 
+.status-ASSIGNED,
+.status-CANCELING {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
 .status-SUCCESS {
   color: var(--success);
   background: var(--success-subtle);
 }
 
-.status-FAILED,
-.status-CANCELED,
-.status-ABORTED {
+.status-FAILED {
   color: var(--danger);
   background: var(--danger-subtle);
+}
+
+.status-CANCELED {
+  color: var(--muted);
+  background: var(--canvas-inset);
+}
+
+.status-ABORTED {
+  color: var(--attention);
+  background: var(--attention-subtle);
 }
 
 .times,
 .kv {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(100px, 0.35fr) minmax(0, 1fr);
   gap: 8px 16px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .times span,
@@ -122,6 +136,7 @@
 .kv b {
   color: var(--fg);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .actions {
@@ -131,15 +146,18 @@
 }
 
 .empty {
-  min-height: 120px;
+  min-height: 104px;
   display: grid;
-  place-items: center;
-  color: var(--faint);
-  border-radius: var(--radius);
-  background: var(--canvas);
-  box-shadow: var(--shadow-border);
+  align-content: center;
+  justify-items: start;
+  padding: 18px 20px;
+  color: var(--muted);
   font-size: 14px;
-  text-align: center;
+  text-align: left;
+}
+
+.empty strong {
+  color: var(--fg);
 }
 
 .script-details {
@@ -150,6 +168,6 @@
 .script-details summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }

@@ -14,14 +14,21 @@ const secretHost = document.getElementById("agent-secret");
 
 let agents = [];
 let editing = null;
+let savingAgent = false;
+let loading = false;
 
 async function load() {
+  if (loading) return;
+  loading = true;
   try {
     const response = await getJSON("/api/agents");
     agents = response.agents || [];
     render();
   } catch (error) {
+    list?.setAttribute("aria-busy", "false");
     showNotice(notice, t("notice.loadFailed", { error: error.message }), "error");
+  } finally {
+    loading = false;
   }
 }
 
@@ -38,10 +45,13 @@ function agentPayload(agent, overrides = {}) {
   };
 }
 
-function stateText(agent) {
-  if (!agent.enabled) return t("common.disabled");
-  if (agent.paused) return t("common.paused");
-  return agent.online ? t("common.online") : t("common.offline");
+function stateInfo(agent) {
+  if (agent.blocked) return { className: "agent-blocked", label: t("common.blocked") };
+  if (!agent.enabled) return { className: "agent-disabled", label: t("common.disabled") };
+  if (agent.paused) return { className: "agent-paused", label: t("common.paused") };
+  if (!agent.online) return { className: "agent-offline", label: t("common.offline") };
+  if (agent.current_execution_id) return { className: "agent-busy", label: t("common.busy") };
+  return { className: "agent-online", label: t("common.online") };
 }
 
 function render() {
@@ -53,15 +63,18 @@ function render() {
     const attention = agent.blocked
       ? '<div class="attention">' + escapeHTML(agent.blocked_reason || "") + "</div>"
       : "";
+    const state = stateInfo(agent);
     return (
       '<div class="record">' +
       '<div class="record-head"><div class="record-title"><strong>' + escapeHTML(agent.name || agent.id) + "</strong>" +
-      '<div class="meta">' + escapeHTML(agent.id + " · " + stateText(agent)) + "</div>" +
+      '<div class="agent-identity"><span class="meta identifier">' + escapeHTML(agent.id) + "</span>" +
+      '<span class="agent-state ' + state.className + '"><span class="status-dot" aria-hidden="true"></span>' + escapeHTML(state.label) + "</span></div>" +
       (agent.description ? '<div class="meta">' + escapeHTML(agent.description) + "</div>" : "") +
       "</div><div class=\"record-actions\">" +
       '<button type="button" class="secondary compact" data-edit="' + escapeHTML(agent.id) + '">' + escapeHTML(t("action.edit")) + "</button>" +
+      '<details class="action-menu"><summary data-i18n="action.more">More</summary><div class="action-menu-items">' +
       '<button type="button" class="secondary compact" data-pause="' + escapeHTML(agent.id) + '">' +
-      escapeHTML(agent.paused ? t("field.enabled") : t("field.paused")) + "</button>" +
+      escapeHTML(agent.paused ? t("action.resume") : t("action.pause")) + "</button>" +
       '<button type="button" class="secondary compact" data-token="' + escapeHTML(agent.id) + '">' +
       escapeHTML(agent.enrolled ? t("action.rotate") : t("action.enroll")) + "</button>" +
       (agent.enrolled
@@ -69,6 +82,7 @@ function render() {
         : "") +
       '<a class="button secondary compact" href="/runs' + query({ agent: agent.id }) + '">' + escapeHTML(t("action.viewRuns")) + "</a>" +
       '<button type="button" class="danger compact" data-delete="' + escapeHTML(agent.id) + '">' + escapeHTML(t("action.delete")) + "</button>" +
+      "</div></details>" +
       "</div></div>" +
       '<div class="record-grid">' +
       "<span>" + escapeHTML(t("field.labels")) + ": " + (renderLabels(agent.labels) || "-") + "</span>" +
@@ -105,6 +119,7 @@ function openEditor(agent) {
 
 editorForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (savingAgent) return;
   const values = formValues(editorForm);
   const payload = {
     id: (values.id || "").trim(),
@@ -114,6 +129,9 @@ editorForm?.addEventListener("submit", async (event) => {
     enabled: Boolean(values.enabled),
     paused: Boolean(values.paused),
   };
+  const submitButton = editorForm.querySelector('[type="submit"]');
+  savingAgent = true;
+  if (submitButton) submitButton.disabled = true;
   try {
     if (editing) {
       await putJSON("/api/agents/" + encodeURIComponent(editing.id), payload);
@@ -125,6 +143,9 @@ editorForm?.addEventListener("submit", async (event) => {
     await load();
   } catch (error) {
     showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+  } finally {
+    savingAgent = false;
+    if (submitButton?.isConnected) submitButton.disabled = false;
   }
 });
 
@@ -159,52 +180,75 @@ list?.addEventListener("click", async (event) => {
   const pause = event.target.closest("[data-pause]");
   if (pause) {
     const agent = agents.find((entry) => entry.id === pause.dataset.pause);
+    pause.disabled = true;
     try {
       await putJSON("/api/agents/" + encodeURIComponent(agent.id), agentPayload(agent, { paused: !agent.paused }));
       await load();
     } catch (error) {
       showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+    } finally {
+      if (pause.isConnected) pause.disabled = false;
     }
     return;
   }
   const token = event.target.closest("[data-token]");
   if (token) {
+    const agent = agents.find((entry) => entry.id === token.dataset.token);
+    if (agent?.enrolled && !confirmAction(t("agents.confirmRotate", { id: agent.id }))) return;
+    token.disabled = true;
     try {
       const issued = await postJSON("/api/agents/" + encodeURIComponent(token.dataset.token) + "/token", {});
       showSecret(token.dataset.token, issued.token);
       await load();
     } catch (error) {
       showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+    } finally {
+      if (token.isConnected) token.disabled = false;
     }
     return;
   }
   const revoke = event.target.closest("[data-revoke]");
   if (revoke) {
     if (!confirmAction(t("action.revoke") + " " + revoke.dataset.revoke + "?")) return;
+    revoke.disabled = true;
     try {
       await deleteJSON("/api/agents/" + encodeURIComponent(revoke.dataset.revoke) + "/token");
       showNotice(notice, t("notice.deleted"), "ok");
       await load();
     } catch (error) {
       showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+    } finally {
+      if (revoke.isConnected) revoke.disabled = false;
     }
     return;
   }
   const remove = event.target.closest("[data-delete]");
   if (remove) {
     if (!confirmAction(t("action.delete") + " " + remove.dataset.delete + "?")) return;
+    remove.disabled = true;
     try {
       await deleteJSON("/api/agents/" + encodeURIComponent(remove.dataset.delete));
       showNotice(notice, t("notice.deleted"), "ok");
       await load();
     } catch (error) {
       showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+    } finally {
+      if (remove.isConnected) remove.disabled = false;
     }
   }
 });
 
 document.addEventListener("builda:localechange", render);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") load();
+});
+window.addEventListener("pagehide", () => {
+  secretHost.replaceChildren();
+  secretHost.hidden = true;
+});
 
 await initShell();
 await load();
-setInterval(load, 5000);
+setInterval(() => {
+  if (document.visibilityState === "visible") load();
+}, 5000);

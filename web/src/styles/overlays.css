@@ -4,8 +4,8 @@
   z-index: 10;
   display: grid;
   place-items: center;
-  padding: 24px;
-  background: rgba(31, 35, 40, 0.42);
+  padding: 20px;
+  background: color-mix(in srgb, var(--fg) 44%, transparent);
 }
 
 .modal-shell[hidden],
@@ -14,11 +14,12 @@
 }
 
 .modal {
-  width: min(520px, 100%);
-  max-height: min(720px, calc(100vh - 48px));
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100dvh - 40px));
   overflow: auto;
   gap: 16px;
-  padding: 18px;
+  padding: 20px;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--canvas);
   box-shadow: var(--shadow-popover);
@@ -42,6 +43,10 @@
   gap: 12px;
 }
 
+.modal-fields > .form-row {
+  min-width: 0;
+}
+
 .field {
   gap: 6px;
 }
@@ -49,6 +54,19 @@
 .field label {
   font-size: 13px;
   font-weight: 600;
+}
+
+.modal .task-actions {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.modal[aria-busy="true"] {
+  cursor: progress;
+}
+
+body.modal-open {
+  overflow: hidden;
 }
 
 .notice {
@@ -68,4 +86,18 @@
 .notice.ok {
   background: var(--success-subtle);
   color: var(--success);
+}
+
+@media (max-width: 560px) {
+  .modal-shell {
+    align-items: end;
+    padding: 8px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+    padding: 16px;
+    border-radius: 12px 12px 8px 8px;
+  }
 }

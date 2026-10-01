@@ -3,21 +3,25 @@ import AppShell from "../layouts/AppShell.astro";
 ---
 
 <AppShell title="Run · Builda" backHref="/runs" backLabel="뒤로" headerMode="run-detail">
-  <main class="workspace run-detail-grid">
+  <main id="main-content" class="workspace run-detail-grid">
     <div id="run-status" class="notice" role="status" aria-live="polite" hidden></div>
     <section class="summary">
       <div class="summary-head">
         <div class="summary-title">
           <h1 id="run-title" data-i18n="run.loading">실행을 불러오는 중</h1>
-          <div class="meta" id="run-id"></div>
+          <div class="run-id-line">
+            <span class="meta identifier" id="run-id"></span>
+            <button class="secondary compact" id="copy-run-id" type="button" data-i18n="action.copyID">ID 복사</button>
+          </div>
+          <div class="meta"><span data-i18n="field.agent">에이전트</span>: <span class="identifier" id="run-agent"></span></div>
           <div class="param-list" id="params" aria-label="Run parameters" data-i18n-aria-label="params.aria" hidden></div>
         </div>
         <div class="summary-actions">
           <span id="badge-host"></span>
-          <button class="secondary compact" id="rerun-run" type="button" data-i18n="action.rerun">다시 실행</button>
-          <button class="secondary compact" id="resolve-run" type="button" hidden data-i18n="action.resolve">정리</button>
-          <button class="danger compact" id="cancel-run" type="button" hidden data-i18n="action.cancel">취소</button>
-          <button class="danger compact" id="delete-run" type="button" hidden data-i18n="action.deleteRun">실행 기록 삭제</button>
+          <button class="secondary compact" id="rerun-run" type="button" data-focus-key="rerun" data-i18n="action.rerun">다시 실행</button>
+          <button class="secondary compact" id="resolve-run" type="button" data-focus-key="resolve" hidden data-i18n="action.resolve">정리</button>
+          <button class="danger compact" id="cancel-run" type="button" data-focus-key="cancel" hidden data-i18n="action.cancel">취소</button>
+          <button class="danger compact" id="delete-run" type="button" data-focus-key="delete" hidden data-i18n="action.deleteRun">실행 기록 삭제</button>
         </div>
       </div>
       <div id="attention" class="attention" hidden></div>
@@ -32,10 +36,12 @@ import AppShell from "../layouts/AppShell.astro";
         <h2 data-i18n="log.heading">로그</h2>
         <div class="toolbar">
           <button id="copy-log" class="secondary compact" type="button" data-i18n="action.copyLog">로그 복사</button>
-          <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow on</button>
+          <button id="wrap-log" class="secondary compact" type="button" aria-pressed="true" data-i18n="log.wrapOn">Wrap on</button>
+          <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true" data-i18n="action.followOn">Follow on</button>
         </div>
       </div>
-      <pre id="log" tabindex="0">로그를 불러오는 중...</pre>
+      <pre id="log" tabindex="0" aria-label="Log" data-i18n-aria-label="log.heading">로그를 불러오는 중...</pre>
+      <div id="log-update" class="sr-only" role="status" aria-live="polite"></div>
     </section>
   </main>
 
