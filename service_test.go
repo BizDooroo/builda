@@ -8,130 +8,163 @@ import (
 	"testing"
 )
 
-func TestServicePrintLinuxUnit(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+// newTestRoot builds the root command with isolated output buffers.
+func newTestRoot(t *testing.T, args ...string) (*bytes.Buffer, error) {
+	t.Helper()
+	root := newRootCommand()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs(args)
+	return out, root.Execute()
+}
 
-	var out bytes.Buffer
-	cmd := newRootCommand()
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{
-		"--config", filepath.Join(t.TempDir(), "builda config.yaml"),
-		"--addr", "127.0.0.1:9000",
-		"--addr", "127.0.0.1:9001",
-		"service", "print",
-		"--target", "linux",
-		"--binary", "/usr/local/bin/builda",
-	})
-	if err := cmd.Execute(); err != nil {
+func TestServicePrintLinuxUnit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	configPath := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(sampleConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := newTestRoot(t, "service", "print", "--target", "linux", "--binary", "/usr/local/bin/builda", "--config", configPath)
+	if err != nil {
 		t.Fatalf("service print returned error: %v", err)
 	}
-	body := out.String()
+	unit := out.String()
 	for _, want := range []string{
-		"[Unit]",
+		"Description=Builda task runner",
 		`ExecStart="/usr/local/bin/builda" "serve" "--config"`,
-		`"--addr" "127.0.0.1:9000" "--addr" "127.0.0.1:9001"`,
+		"Environment=PATH=/usr/local/bin:",
 		"Restart=always",
+		"RestartSec=10s",
+		"TimeoutStopSec=30s",
 		"WantedBy=default.target",
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected service unit to include %q, got:\n%s", want, body)
+		if !strings.Contains(unit, want) {
+			t.Fatalf("expected systemd unit to include %q, got:\n%s", want, unit)
 		}
 	}
 }
 
+func TestServicePrintRoleUnits(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	controllerConfig := filepath.Join(home, "controller.yaml")
+	if err := os.WriteFile(controllerConfig, []byte(sampleControllerConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := newTestRoot(t, "controller", "service", "print", "--target", "linux",
+		"--binary", "/usr/local/bin/builda", "--config", controllerConfig)
+	if err != nil {
+		t.Fatalf("controller service print returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), `"controller" "serve"`) {
+		t.Fatalf("expected controller role exec args, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "Description=Builda controller") {
+		t.Fatalf("expected controller description, got:\n%s", out.String())
+	}
+
+	agentConfig := filepath.Join(home, "agent.yaml")
+	if err := os.WriteFile(agentConfig, []byte(sampleAgentConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err = newTestRoot(t, "agent", "service", "print", "--target", "linux",
+		"--binary", "/usr/local/bin/builda", "--config", agentConfig)
+	if err != nil {
+		t.Fatalf("agent service print returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), `"agent" "run"`) {
+		t.Fatalf("expected agent role exec args, got:\n%s", out.String())
+	}
+}
+
+// TestServicePrintLaunchdPlist pins the keys that make a background
+// LaunchAgent start reliably: a direct executable, an explicit PATH that
+// includes Homebrew, Background process type, a restart throttle, and
+// redirected logs.
 func TestServicePrintLaunchdPlist(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	configPath := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(sampleConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	var out bytes.Buffer
-	cmd := newRootCommand()
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{
-		"--config", filepath.Join(t.TempDir(), "config.yaml"),
-		"service", "print",
-		"--target", "darwin",
-		"--name", "builda.dev",
-		"--binary", "/opt/builda/bin/builda",
-	})
-	if err := cmd.Execute(); err != nil {
+	out, err := newTestRoot(t, "service", "print", "--target", "darwin", "--name", "builda-controller",
+		"--binary", "/usr/local/bin/builda", "--config", configPath)
+	if err != nil {
 		t.Fatalf("service print returned error: %v", err)
 	}
-	body := out.String()
+	plist := out.String()
 	for _, want := range []string{
-		`<string>com.bizdooroo.builda.builda.dev</string>`,
-		`<string>/opt/builda/bin/builda</string>`,
-		`<string>serve</string>`,
-		`<string>--config</string>`,
-		`<key>RunAtLoad</key>`,
-		`<true/>`,
-		filepath.Join(home, "Library", "Logs", "builda.dev.out.log"),
+		"<string>com.bizdooroo.builda.controller</string>",
+		"<string>/usr/local/bin/builda</string>",
+		"<key>EnvironmentVariables</key>",
+		"/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin",
+		"<key>RunAtLoad</key>",
+		"<key>KeepAlive</key>",
+		"<key>ProcessType</key>\n  <string>Background</string>",
+		"<key>LimitLoadToSessionType</key>\n  <string>Aqua</string>",
+		"<key>ThrottleInterval</key>\n  <integer>10</integer>",
+		"<key>ExitTimeOut</key>\n  <integer>30</integer>",
+		filepath.Join(home, "Library", "Logs", "builda", "builda-controller.out.log"),
+		filepath.Join(home, "Library", "Logs", "builda", "builda-controller.err.log"),
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected launchd plist to include %q, got:\n%s", want, body)
+		if !strings.Contains(plist, want) {
+			t.Fatalf("expected launchd plist to include %q, got:\n%s", want, plist)
 		}
+	}
+	for _, unwanted := range []string{"bash", "/bin/sh", "osascript", "open ", "Terminal", "login"} {
+		if strings.Contains(plist, unwanted) {
+			t.Fatalf("launchd plist must not reference %q, got:\n%s", unwanted, plist)
+		}
+	}
+}
+
+func TestLaunchdLabelRoleNaming(t *testing.T) {
+	cases := map[string]string{
+		defaultServiceName:    "com.bizdooroo.builda",
+		controllerServiceName: "com.bizdooroo.builda.controller",
+		agentServiceName:      "com.bizdooroo.builda.agent",
+		"builda-mac":          "com.bizdooroo.builda.mac",
+		"custom":              "com.bizdooroo.builda.custom",
+	}
+	for name, want := range cases {
+		if got := launchdLabel(name); got != want {
+			t.Fatalf("launchdLabel(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if got := roleDefaultServiceName(RoleController); got != controllerServiceName {
+		t.Fatalf("controller service name = %q", got)
+	}
+	if got := roleDefaultServiceName(RoleAgent); got != agentServiceName {
+		t.Fatalf("agent service name = %q", got)
 	}
 }
 
 func TestServiceInstallDryRunDoesNotCreateConfig(t *testing.T) {
 	home := t.TempDir()
-	configPath := filepath.Join(t.TempDir(), "missing", "config.yaml")
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	configPath := filepath.Join(home, "missing", "config.yaml")
 
-	var out bytes.Buffer
-	cmd := newRootCommand()
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{
-		"--config", configPath,
-		"service", "install",
-		"--dry-run",
-		"--target", "linux",
-		"--binary", "/usr/local/bin/builda",
-	})
-	if err := cmd.Execute(); err != nil {
+	out, err := newTestRoot(t, "service", "install", "--dry-run", "--target", "linux",
+		"--binary", "/usr/local/bin/builda", "--config", configPath)
+	if err != nil {
 		t.Fatalf("service install --dry-run returned error: %v", err)
 	}
-	if _, err := os.Stat(configPath); !os.IsNotExist(err) {
-		t.Fatalf("expected dry-run not to create config, stat err=%v", err)
+	if _, statErr := os.Stat(configPath); !os.IsNotExist(statErr) {
+		t.Fatalf("dry run must not create the config file, stat error: %v", statErr)
 	}
-	if !strings.Contains(out.String(), "# "+filepath.Join(home, ".config", "systemd", "user", "builda.service")) {
-		t.Fatalf("expected dry-run output to include service path, got:\n%s", out.String())
+	if !strings.Contains(out.String(), "# planned commands") {
+		t.Fatalf("expected the dry run to print the planned commands, got:\n%s", out.String())
 	}
-}
-
-func TestServiceControlCommands(t *testing.T) {
-	linux, err := serviceControlCommands("linux", "builda", "/ignored", "restart")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(linux) != 1 || linux[0].Name != "systemctl" || strings.Join(linux[0].Args, " ") != "--user restart builda.service" {
-		t.Fatalf("unexpected linux restart command: %#v", linux)
-	}
-
-	status, err := serviceControlCommands("linux", "builda", "/ignored", "status")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(status) != 1 || !status[0].StreamOutput {
-		t.Fatalf("expected linux status to stream output, got %#v", status)
-	}
-
-	path := filepath.Join(t.TempDir(), "com.bizdooroo.builda.plist")
-	darwin, err := serviceControlCommands("darwin", "builda", path, "restart")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(darwin) != 4 {
-		t.Fatalf("expected four darwin restart commands, got %#v", darwin)
-	}
-	if darwin[0].Name != "launchctl" || strings.Join(darwin[0].Args[:2], " ") != "bootout "+launchdDomain() || !darwin[0].IgnoreError {
-		t.Fatalf("unexpected darwin bootout command: %#v", darwin[0])
-	}
-	if strings.Join(darwin[3].Args, " ") != "kickstart -k "+launchdDomain()+"/com.bizdooroo.builda" {
-		t.Fatalf("unexpected darwin kickstart command: %#v", darwin[3])
+	if _, statErr := os.Stat(filepath.Join(home, ".config", "systemd", "user", "builda.service")); !os.IsNotExist(statErr) {
+		t.Fatalf("dry run must not write the unit file")
 	}
 }

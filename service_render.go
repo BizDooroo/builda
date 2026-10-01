@@ -9,6 +9,26 @@ import (
 	"strings"
 )
 
+// Service file rendering. The daemon is always the Builda executable itself:
+// no shell, no wrapper, no login session, so nothing can open a terminal or
+// source an interactive profile.
+const (
+	serviceRestartThrottleSeconds = 10
+	serviceExitTimeoutSeconds     = 30
+)
+
+// servicePATH is the explicit search path given to the daemon. launchd starts
+// user agents with only /usr/bin:/bin:/usr/sbin:/sbin, which leaves Homebrew
+// build tools unreachable, so the service file states the path it needs.
+func servicePATH(targetOS string) string {
+	switch targetOS {
+	case "darwin":
+		return "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+	default:
+		return "/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+	}
+}
+
 func renderServiceArtifact(spec serviceSpec) (serviceArtifact, error) {
 	path, err := servicePath(spec.TargetOS, spec.Name)
 	if err != nil {
@@ -32,22 +52,25 @@ func renderSystemdUnit(spec serviceSpec) string {
 	args := serviceExecArgs(spec)
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
-	b.WriteString("Description=Builda task runner\n")
+	b.WriteString("Description=Builda " + serviceDescriptionRole(spec.Role) + "\n")
 	b.WriteString("After=network-online.target\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
 	b.WriteString("ExecStart=")
 	b.WriteString(strings.Join(systemdQuoteArgs(args), " "))
 	b.WriteString("\n")
+	b.WriteString("Environment=PATH=" + servicePATH(spec.TargetOS) + "\n")
+	b.WriteString("WorkingDirectory=" + filepath.Dir(spec.ConfigPath) + "\n")
 	b.WriteString("Restart=always\n")
-	b.WriteString("RestartSec=5s\n\n")
+	b.WriteString(fmt.Sprintf("RestartSec=%ds\n", serviceRestartThrottleSeconds))
+	b.WriteString(fmt.Sprintf("TimeoutStopSec=%ds\n\n", serviceExitTimeoutSeconds))
 	b.WriteString("[Install]\n")
 	b.WriteString("WantedBy=default.target\n")
 	return b.String()
 }
 
 func renderLaunchdPlist(spec serviceSpec) (string, error) {
-	logDir, err := userLogDir()
+	logDir, err := serviceLogDir()
 	if err != nil {
 		return "", err
 	}
@@ -65,8 +88,21 @@ func renderLaunchdPlist(spec serviceSpec) (string, error) {
 		b.WriteString("</string>\n")
 	}
 	b.WriteString("  </array>\n")
+	b.WriteString("  <key>EnvironmentVariables</key>\n")
+	b.WriteString("  <dict>\n")
+	b.WriteString("    <key>PATH</key>\n")
+	b.WriteString("    <string>" + xmlEscape(servicePATH(spec.TargetOS)) + "</string>\n")
+	b.WriteString("  </dict>\n")
 	writePlistTrue(&b, "RunAtLoad")
 	writePlistTrue(&b, "KeepAlive")
+	// Background keeps the agent out of foreground scheduling and App Nap.
+	writePlistString(&b, "ProcessType", "Background")
+	// Aqua pins the agent to the desktop login session, which is the only
+	// session type that can reach the login keychain used by code signing,
+	// and prevents a second copy loading into another session type.
+	writePlistString(&b, "LimitLoadToSessionType", "Aqua")
+	writePlistInteger(&b, "ThrottleInterval", serviceRestartThrottleSeconds)
+	writePlistInteger(&b, "ExitTimeOut", serviceExitTimeoutSeconds)
 	writePlistString(&b, "StandardOutPath", filepath.Join(logDir, spec.Name+".out.log"))
 	writePlistString(&b, "StandardErrorPath", filepath.Join(logDir, spec.Name+".err.log"))
 	writePlistString(&b, "WorkingDirectory", filepath.Dir(spec.ConfigPath))
@@ -81,6 +117,13 @@ func writePlistString(b *strings.Builder, key, value string) {
 	b.WriteString("  <string>")
 	b.WriteString(xmlEscape(value))
 	b.WriteString("</string>\n")
+}
+
+func writePlistInteger(b *strings.Builder, key string, value int) {
+	b.WriteString("  <key>")
+	b.WriteString(xmlEscape(key))
+	b.WriteString("</key>\n")
+	b.WriteString(fmt.Sprintf("  <integer>%d</integer>\n", value))
 }
 
 func writePlistTrue(b *strings.Builder, key string) {
@@ -98,12 +141,23 @@ func xmlEscape(value string) string {
 	return b.String()
 }
 
+// serviceExecArgs renders the role-specific command line of the daemon.
 func serviceExecArgs(spec serviceSpec) []string {
-	args := []string{spec.BinaryPath, "serve", "--config", spec.ConfigPath}
-	if len(spec.Addrs) == 0 {
+	args := []string{spec.BinaryPath}
+	switch spec.Role {
+	case RoleController:
+		args = append(args, "controller", "serve")
+	case RoleAgent:
+		args = append(args, "agent", "run")
+	default:
+		args = append(args, "serve")
+	}
+	args = append(args, "--config", spec.ConfigPath)
+	if spec.Role == RoleAgent {
+		// The agent has no listener, so listen overrides do not apply.
 		return args
 	}
-	for _, addr := range resolveListenAddresses(nil, spec.Addrs) {
+	for _, addr := range spec.Addrs {
 		args = append(args, "--addr", addr)
 	}
 	return args
@@ -139,10 +193,23 @@ func servicePath(targetOS, name string) (string, error) {
 	}
 }
 
-func userLogDir() (string, error) {
+// serviceLogDir is the directory holding the daemon's redirected stdout and
+// stderr. Install creates it so launchd never fails to spawn on a missing path.
+func serviceLogDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "Library", "Logs"), nil
+	return filepath.Join(home, "Library", "Logs", "builda"), nil
+}
+
+func serviceDescriptionRole(role string) string {
+	switch role {
+	case RoleController:
+		return "controller"
+	case RoleAgent:
+		return "agent"
+	default:
+		return "task runner"
+	}
 }
