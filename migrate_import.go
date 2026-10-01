@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -118,11 +119,16 @@ func planImports(controller *Controller, bundle *MigrationBundle, mapping *Migra
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("skip %s: mapped job %q does not exist on this controller", run.ID, task.Job))
 			continue
 		}
-		execution, err := buildImportedExecution(cfg, job, bundle, mapping, task, run)
+		execution, retired, err := buildImportedExecution(cfg, job, bundle, mapping, task, run)
 		if err != nil {
 			report.Skipped++
 			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf("skip %s: %v", run.ID, err))
 			continue
+		}
+		if len(retired) > 0 {
+			report.Diagnostics = append(report.Diagnostics, fmt.Sprintf(
+				"%s: imported with %s, which job %q no longer offers; the run is kept as history and cannot be re-run as it is",
+				run.ID, strings.Join(retired, ", "), job.ID))
 		}
 		for taken[execution.ID] {
 			execution.ID = newExecutionID()
@@ -240,7 +246,7 @@ func checkHistoryHeadroom(controller *Controller, incoming int, report *importRe
 
 // buildImportedExecution maps one legacy run onto the new job and parameter
 // shape so job and project filters work across migrated history.
-func buildImportedExecution(cfg ControllerConfig, job JobConfig, bundle *MigrationBundle, mapping *MigrationMapping, task MappingTask, run LegacyRun) (*Execution, error) {
+func buildImportedExecution(cfg ControllerConfig, job JobConfig, bundle *MigrationBundle, mapping *MigrationMapping, task MappingTask, run LegacyRun) (*Execution, []string, error) {
 	values := map[string]string{}
 	for name, value := range task.Parameters {
 		values[name] = value
@@ -259,9 +265,9 @@ func buildImportedExecution(cfg ControllerConfig, job JobConfig, bundle *Migrati
 		values[target] = value
 	}
 
-	resolved, err := resolveParameters(cfg, job, parameterValuesToQuery(values))
+	resolved, retired, err := resolveHistoricalParameters(cfg, job, values)
 	if err != nil {
-		return nil, fmt.Errorf("mapped parameters do not match job %q: %w", job.ID, err)
+		return nil, nil, fmt.Errorf("mapped parameters do not match job %q: %w", job.ID, err)
 	}
 
 	legacyTask := findLegacyTask(bundle, run.TaskID)
@@ -302,7 +308,7 @@ func buildImportedExecution(cfg ControllerConfig, job JobConfig, bundle *Migrati
 	if legacyTask != nil && execution.Origin.TaskName == "" {
 		execution.Origin.TaskName = legacyTask.Name
 	}
-	return execution, nil
+	return execution, retired, nil
 }
 
 func findLegacyTask(bundle *MigrationBundle, id string) *TaskConfig {

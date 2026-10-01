@@ -20,6 +20,7 @@
 
 ## State and lifecycle
 - Importing history competes with live runs for the terminal history cap. Refuse an import the cap cannot hold, with the number to raise it to, rather than pruning the controller's own history.
+- Imported history records what happened, not what can still be requested. A recorded choice the job no longer offers is kept with a diagnostic, because dropping it would silently lose history; re-running it is refused at enqueue time, which is where that check belongs. A parameter the job no longer declares is still a hard skip, since such history could not be filtered correctly.
 - Import idempotence lives in a durable ledger in the snapshot, keyed by a machine and legacy run ID struct rather than a joined string. Deciding from surviving executions is wrong: pruning or deleting a run would make it importable again. Backfill the ledger from retained origins when loading an older snapshot.
 - An import is all-or-nothing. Copy and flush every log under its new execution ID before committing any state, remove what the attempt created when either step fails, and never modify the source bundle. Deduplicate repeated origins inside one bundle deterministically.
 - An import with nothing to do must not mutate the snapshot at all, because a mutation also prunes.

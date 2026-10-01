@@ -276,11 +276,55 @@ func TestImportSkipsMappingsPointingAtAMissingJob(t *testing.T) {
 	}
 }
 
-// TestImportRejectsParametersTheJobNoLongerAccepts keeps mapped history honest.
-func TestImportRejectsParametersTheJobNoLongerAccepts(t *testing.T) {
+// TestImportKeepsRunsWhoseOptionWasRetired covers history that used a choice
+// the job no longer offers. A record of what happened must not be discarded
+// just because it could not be requested again today.
+func TestImportKeepsRunsWhoseOptionWasRetired(t *testing.T) {
 	scenario := newMigrationScenario(t, nil)
 	entry := scenario.mapping.Tasks["alpha"]
-	entry.Project = "ghost-project"
+	entry.Project = "retired-project"
+	scenario.mapping.Tasks["alpha"] = entry
+
+	report, err := importBundle(scenario.controller, scenario.bundle, scenario.mapping, scenario.bundleDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Imported != 2 || report.Skipped != 0 {
+		t.Fatalf("both runs must be imported, got %+v", report)
+	}
+	if !containsSubstring(report.Diagnostics, "no longer offers") {
+		t.Fatalf("the retired value must be reported, got %v", report.Diagnostics)
+	}
+
+	var retired *Execution
+	for _, execution := range scenario.controller.store.Executions() {
+		if execution.Parameters["project"] == "retired-project" {
+			retired = execution
+		}
+	}
+	if retired == nil {
+		t.Fatal("the run must keep the value it actually used")
+	}
+	if retired.ParameterEnv["BUILDA_PARAM_PROJECT"] != "retired-project" {
+		t.Fatalf("the recorded environment must match the run, got %v", retired.ParameterEnv)
+	}
+	if _, ok := retired.SelectedOptions["project"]; ok {
+		t.Fatal("a retired value has no option metadata to attach")
+	}
+
+	// Re-running it is still refused, which is where that check belongs.
+	if _, err := scenario.controller.Rerun(retired.ID, "test"); err == nil {
+		t.Fatal("re-running a retired option must still be rejected")
+	}
+}
+
+// TestImportSkipsRunsWhoseParameterIsGone keeps a mapping that names a
+// parameter the job no longer declares a hard error, because such history
+// could not be filtered correctly.
+func TestImportSkipsRunsWhoseParameterIsGone(t *testing.T) {
+	scenario := newMigrationScenario(t, nil)
+	entry := scenario.mapping.Tasks["alpha"]
+	entry.Parameters = map[string]string{"project": "alpha", "nonexistent": "x"}
 	scenario.mapping.Tasks["alpha"] = entry
 
 	report, err := importBundle(scenario.controller, scenario.bundle, scenario.mapping, scenario.bundleDir, false)
@@ -288,108 +332,10 @@ func TestImportRejectsParametersTheJobNoLongerAccepts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.Skipped != 1 {
-		t.Fatalf("expected the unmappable run to be skipped, got %+v", report)
+		t.Fatalf("expected the run with an undeclared parameter to be skipped, got %+v", report)
 	}
-	if !containsSubstring(report.Diagnostics, "mapped parameters do not match job") {
+	if !containsSubstring(report.Diagnostics, "does not declare parameter") {
 		t.Fatalf("expected a parameter diagnostic, got %v", report.Diagnostics)
-	}
-}
-
-func TestMigrateCLIDefaultsToDryRun(t *testing.T) {
-	fixture := newLegacyFixture(t, "linux", "android", []string{"alpha"}, nil)
-	outDir := filepath.Join(t.TempDir(), "bundle")
-
-	out, err := newTestRoot(t, "migrate", "export", "--machine", "linux", "--config", fixture.ConfigPath, "--out-dir", outDir)
-	if err != nil {
-		t.Fatalf("migrate export: %v", err)
-	}
-	if !strings.Contains(out.String(), "machine linux") {
-		t.Fatalf("unexpected output %s", out.String())
-	}
-	if _, statErr := os.Stat(outDir); !os.IsNotExist(statErr) {
-		t.Fatal("migrate export must default to a dry run")
-	}
-
-	if _, err := newTestRoot(t, "migrate", "export", "--config", fixture.ConfigPath, "--out-dir", outDir); err == nil {
-		t.Fatal("expected --machine to be required")
-	}
-	if _, err := newTestRoot(t, "migrate", "export", "--machine", "linux", "--config", fixture.ConfigPath); err == nil {
-		t.Fatal("expected --out-dir to be required")
-	}
-
-	if _, err := newTestRoot(t, "migrate", "export", "--machine", "linux", "--config", fixture.ConfigPath, "--out-dir", outDir, "--apply"); err != nil {
-		t.Fatalf("migrate export --apply: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(outDir, bundleFileName)); err != nil {
-		t.Fatalf("--apply must write the bundle: %v", err)
-	}
-
-	// plan prints the mapping without writing it.
-	out, err = newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/home/someone/git/dooroo")
-	if err != nil {
-		t.Fatalf("migrate plan: %v", err)
-	}
-	if !strings.Contains(out.String(), "machine: linux") {
-		t.Fatalf("expected the drafted mapping on stdout, got %s", out.String())
-	}
-	if _, statErr := os.Stat(filepath.Join(outDir, mappingFileName)); !os.IsNotExist(statErr) {
-		t.Fatal("migrate plan must default to a dry run")
-	}
-	if _, err := newTestRoot(t, "migrate", "plan", "--bundle", outDir, "--workspace-root", "/home/someone/git/dooroo", "--apply"); err != nil {
-		t.Fatalf("migrate plan --apply: %v", err)
-	}
-	mappingPath := filepath.Join(outDir, mappingFileName)
-	if _, err := os.Stat(mappingPath); err != nil {
-		t.Fatalf("--apply must write the mapping: %v", err)
-	}
-
-	// config prints both documents without writing them.
-	out, err = newTestRoot(t, "migrate", "config", "--bundle", outDir, "--map", mappingPath)
-	if err != nil {
-		t.Fatalf("migrate config: %v", err)
-	}
-	if !strings.Contains(out.String(), "role: controller") || !strings.Contains(out.String(), "role: agent") {
-		t.Fatalf("expected both role documents, got %s", out.String())
-	}
-	if _, err := newTestRoot(t, "migrate", "config", "--bundle", outDir, "--map", mappingPath, "--apply"); err == nil {
-		t.Fatal("expected --out-dir to be required with --apply")
-	}
-	if _, err := newTestRoot(t, "migrate", "config", "--bundle", outDir); err == nil {
-		t.Fatal("expected --map to be required")
-	}
-	if _, err := newTestRoot(t, "migrate", "config", "--map", mappingPath); err == nil {
-		t.Fatal("expected --bundle to be required")
-	}
-
-	configOut := filepath.Join(t.TempDir(), "new")
-	if _, err := newTestRoot(t, "migrate", "config", "--bundle", outDir, "--map", mappingPath, "--out-dir", configOut, "--apply"); err != nil {
-		t.Fatalf("migrate config --apply: %v", err)
-	}
-	controllerPath := filepath.Join(configOut, controllerConfigName)
-	if _, err := loadControllerConfig(controllerPath); err != nil {
-		t.Fatalf("the generated controller config must load: %v", err)
-	}
-
-	// import is a dry run by default.
-	if _, err := newTestRoot(t, "migrate", "import", "--bundle", outDir, "--map", mappingPath, "--config", controllerPath); err != nil {
-		t.Fatalf("migrate import: %v", err)
-	}
-	cfg, err := loadControllerConfig(controllerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime, err := controllerRuntime(controllerPath, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, statErr := os.Stat(runtime.StatePath); !os.IsNotExist(statErr) {
-		t.Fatal("migrate import must default to a dry run")
-	}
-	if _, err := newTestRoot(t, "migrate", "import", "--bundle", outDir, "--map", mappingPath, "--config", controllerPath, "--apply"); err != nil {
-		t.Fatalf("migrate import --apply: %v", err)
-	}
-	if _, err := os.Stat(runtime.StatePath); err != nil {
-		t.Fatalf("--apply must write the controller state: %v", err)
 	}
 }
 

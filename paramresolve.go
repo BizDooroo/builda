@@ -120,6 +120,70 @@ func resolveParameters(cfg ControllerConfig, job JobConfig, values url.Values) (
 	return resolved, nil
 }
 
+// resolveHistoricalParameters resolves the parameters of a run that already
+// happened. It still rejects a name the job does not declare, so history stays
+// filterable, but it keeps a recorded value whose option has since been
+// retired instead of discarding the run. Re-running such a run is rejected at
+// enqueue time, which is where that check belongs.
+func resolveHistoricalParameters(cfg ControllerConfig, job JobConfig, values map[string]string) (ResolvedParameters, []string, error) {
+	declared := make(map[string]ParameterConfig, len(job.Parameters))
+	for _, param := range job.Parameters {
+		declared[param.ID] = param
+	}
+	for name := range values {
+		if _, ok := declared[name]; !ok {
+			return ResolvedParameters{}, nil, fmt.Errorf("job %q does not declare parameter %q", job.ID, name)
+		}
+	}
+
+	resolved := ResolvedParameters{
+		Values:  map[string]string{},
+		Env:     map[string]string{},
+		Options: map[string]OptionConfig{},
+		Paths:   map[string]string{},
+	}
+	retired := make([]string, 0)
+
+	for _, param := range job.Parameters {
+		value := strings.TrimSpace(values[param.ID])
+		if value == "" {
+			value = strings.TrimSpace(param.Default)
+		}
+		if value == "" {
+			resolved.Values[param.ID] = ""
+			resolved.Env[paramEnvName(param.ID)] = ""
+			continue
+		}
+		if param.Type == paramTypeChoice {
+			if selected, ok := findOption(parameterOptions(cfg, param), value); ok {
+				resolved.Options[param.ID] = selected
+				resolved.Env[paramFieldEnvName(param.ID, optionLabelField)] = selected.Label
+				for field, fieldValue := range selected.Values {
+					if field == optionPathField {
+						resolved.Paths[param.ID] = fieldValue
+					}
+					resolved.Env[paramFieldEnvName(param.ID, field)] = fieldValue
+				}
+			} else {
+				retired = append(retired, fmt.Sprintf("%s=%s", param.ID, value))
+			}
+		}
+		resolved.Values[param.ID] = value
+		resolved.Env[paramEnvName(param.ID)] = value
+	}
+	if job.WorkdirParam != "" {
+		resolved.WorkdirPath = resolved.Paths[job.WorkdirParam]
+	}
+	if len(resolved.Options) == 0 {
+		resolved.Options = nil
+	}
+	if len(resolved.Paths) == 0 {
+		resolved.Paths = nil
+	}
+	sort.Strings(retired)
+	return resolved, retired, nil
+}
+
 func findOption(options []OptionConfig, value string) (OptionConfig, bool) {
 	for _, option := range options {
 		if option.Value == value {
