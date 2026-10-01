@@ -25,6 +25,21 @@ func TestMain(m *testing.M) {
 
 func assertEmbeddedWebContains(t *testing.T, needle string) {
 	t.Helper()
+	if !embeddedWebHas(t, needle) {
+		t.Fatalf("expected embedded web assets to contain %q", needle)
+	}
+}
+
+// assertEmbeddedWebLacks keeps removed surfaces out of the shipped bundle.
+func assertEmbeddedWebLacks(t *testing.T, needle string) {
+	t.Helper()
+	if embeddedWebHas(t, needle) {
+		t.Fatalf("expected embedded web assets not to contain %q", needle)
+	}
+}
+
+func embeddedWebHas(t *testing.T, needle string) bool {
+	t.Helper()
 	dist, err := fs.Sub(webDist, "web/dist")
 	if err != nil {
 		t.Fatal(err)
@@ -46,9 +61,7 @@ func assertEmbeddedWebContains(t *testing.T, needle string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !found {
-		t.Fatalf("expected embedded web assets to contain %q", needle)
-	}
+	return found
 }
 
 func waitForRun(t *testing.T, run *Run) {

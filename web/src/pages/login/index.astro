@@ -1,0 +1,22 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Sign in · Builda" chrome={false}>
+  <main class="login-shell">
+    <form id="login-form" class="login-card">
+      <h1 data-i18n="login.title">Builda</h1>
+      <p class="lead" data-i18n="login.lead">컨트롤러에 로그인하세요.</p>
+      <div id="login-status" class="notice" role="status" aria-live="polite" hidden></div>
+      <label for="username" data-i18n="field.username">사용자 이름</label>
+      <input id="username" name="username" type="text" autocomplete="username" value="admin" required />
+      <label for="password" data-i18n="field.password">비밀번호</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+      <button id="login-submit" type="submit" data-i18n="action.signIn">로그인</button>
+    </form>
+  </main>
+
+  <script>
+    import "../../scripts/login.js";
+  </script>
+</AppShell>

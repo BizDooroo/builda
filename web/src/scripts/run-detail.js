@@ -1,167 +1,107 @@
-import {
-  copyText,
-  escapeHTML,
-  flashButtonText,
-  formatTime,
-  initShell,
-  isActiveStatus,
-  renderLogText,
-  renderRunParamChips,
-  runLogDisplayText,
-  showNotice,
-  statusLabel,
-  t,
-} from "./shared.js";
+import { deleteJSON, getJSON, postJSON } from "./api.js";
+import { escapeHTML, formatTime, isActiveStatus, renderChips, renderStatusBadge, showNotice } from "./format.js";
+import { t } from "./i18n.js";
+import { confirmAction, initShell } from "./shell.js";
+import { LogView } from "./logview.js";
+
+const notice = document.getElementById("run-status");
+const titleNode = document.getElementById("run-title");
+const idNode = document.getElementById("run-id");
+const paramsNode = document.getElementById("params");
+const badgeHost = document.getElementById("badge-host");
+const scriptNode = document.getElementById("script");
+const timesNode = document.getElementById("times");
+const attentionNode = document.getElementById("attention");
+const cancelButton = document.getElementById("cancel-run");
+const rerunButton = document.getElementById("rerun-run");
+const deleteButton = document.getElementById("delete-run");
+const resolveButton = document.getElementById("resolve-run");
 
 const runID = decodeURIComponent(window.location.pathname.replace(/^\/runs\//, "").replace(/\/$/, ""));
-const runStatusEl = document.querySelector("#run-status");
-const titleEl = document.querySelector("#run-title");
-const runIDEl = document.querySelector("#run-id");
-const scriptEl = document.querySelector("#script");
-const logEl = document.querySelector("#log");
-const badgeEl = document.querySelector("#badge");
-const cancelRunEl = document.querySelector("#cancel-run");
-const copyLogEl = document.querySelector("#copy-log");
-const deleteRunEl = document.querySelector("#delete-run");
-const followLogEl = document.querySelector("#follow-log");
-const requestedEl = document.querySelector("#requested");
-const startedEl = document.querySelector("#started");
-const finishedEl = document.querySelector("#finished");
-const canceledEl = document.querySelector("#canceled");
-const paramsEl = document.querySelector("#params");
-let timer = 0;
-let followLog = true;
-let currentLogText = logEl.textContent;
-let renderedLogText = logEl.textContent;
-let latestRun = null;
 
-cancelRunEl.addEventListener("click", async () => {
-  if (!confirm(t("confirm.cancelRun"))) return;
-  cancelRunEl.disabled = true;
+const logView = new LogView({
+  pre: document.getElementById("log"),
+  copyButton: document.getElementById("copy-log"),
+  followButton: document.getElementById("follow-log"),
+  notice,
+});
+logView.select(runID);
+
+let run = null;
+
+async function load() {
   try {
-    const response = await fetch("/api/runs/" + encodeURIComponent(runID) + "/cancel", { method: "POST" });
-    if (!response.ok) throw new Error(await response.text());
-    showNotice(runStatusEl, t("notice.runCancelRequested"), "ok");
-    await refresh();
+    run = await getJSON("/api/runs/" + encodeURIComponent(runID));
+    render();
+    await logView.refresh();
   } catch (error) {
-    showNotice(runStatusEl, t("notice.runCancelFailed", { error: error.message }), "error");
-  } finally {
-    cancelRunEl.disabled = false;
+    showNotice(notice, t("notice.loadFailed", { error: error.message }), "error");
+  }
+}
+
+function render() {
+  if (!run) return;
+  titleNode.textContent = run.job_name || run.job_id;
+  idNode.textContent = run.id + " · " + (run.agent_id || "-");
+  paramsNode.innerHTML = renderChips(run.parameters);
+  paramsNode.hidden = !paramsNode.innerHTML;
+  badgeHost.innerHTML = renderStatusBadge(run.status);
+  scriptNode.textContent = run.script || "";
+  timesNode.innerHTML =
+    "<span>" + escapeHTML(t("time.request")) + " " + escapeHTML(formatTime(run.requested_at)) + "</span>" +
+    "<span>" + escapeHTML(t("time.start")) + " " + escapeHTML(formatTime(run.started_at)) + "</span>" +
+    "<span>" + escapeHTML(t("time.finished")) + " " + escapeHTML(formatTime(run.finished_at)) + "</span>" +
+    "<span>" + escapeHTML(t("field.timeout")) + " " + escapeHTML(run.timeout_text || "-") + "</span>";
+  if (run.needs_attention) {
+    attentionNode.hidden = false;
+    attentionNode.textContent = t("run.attention", { message: run.attention || "" });
+  } else {
+    attentionNode.hidden = true;
+  }
+  cancelButton.hidden = !isActiveStatus(run.status);
+  deleteButton.hidden = isActiveStatus(run.status);
+  resolveButton.hidden = !run.needs_attention;
+}
+
+cancelButton?.addEventListener("click", async () => {
+  try {
+    await postJSON("/api/runs/" + encodeURIComponent(runID) + "/cancel", {});
+    await load();
+  } catch (error) {
+    showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
   }
 });
 
-copyLogEl.addEventListener("click", async () => {
-  copyLogEl.disabled = true;
+rerunButton?.addEventListener("click", async () => {
   try {
-    await copyText(currentLogText);
-    flashButtonText(copyLogEl, t("common.copied"));
-    showNotice(runStatusEl, t("notice.logCopied"), "ok");
+    const result = await postJSON("/api/runs/" + encodeURIComponent(runID) + "/rerun", {});
+    window.location.href = "/runs/" + encodeURIComponent(result.run.id);
   } catch (error) {
-    flashButtonText(copyLogEl, t("common.failed"));
-    showNotice(runStatusEl, t("notice.logCopyFailed", { error: error.message }), "error");
-  } finally {
-    copyLogEl.disabled = false;
+    showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
   }
 });
 
-deleteRunEl.addEventListener("click", async () => {
-  if (!confirm(t("confirm.deleteRun"))) return;
-  deleteRunEl.disabled = true;
+resolveButton?.addEventListener("click", async () => {
   try {
-    const response = await fetch("/api/runs/" + encodeURIComponent(runID), { method: "DELETE" });
-    if (!response.ok) throw new Error(await response.text());
-    if (timer) clearInterval(timer);
-    showNotice(runStatusEl, t("notice.deleteRunSuccess"), "ok");
+    await postJSON("/api/runs/" + encodeURIComponent(runID) + "/resolve", {});
+    await load();
+  } catch (error) {
+    showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
+  }
+});
+
+deleteButton?.addEventListener("click", async () => {
+  if (!confirmAction(t("action.deleteRun") + "?")) return;
+  try {
+    await deleteJSON("/api/runs/" + encodeURIComponent(runID));
     window.location.href = "/runs";
   } catch (error) {
-    showNotice(runStatusEl, t("notice.deleteRunFailed", { error: error.message }), "error");
-  } finally {
-    renderLogActions(latestRun);
+    showNotice(notice, t("notice.requestFailed", { error: error.message }), "error");
   }
 });
 
-followLogEl.addEventListener("click", () => {
-  followLog = !followLog;
-  renderFollowButton();
-  if (followLog) logEl.scrollTop = logEl.scrollHeight;
-});
-
-logEl.addEventListener("scroll", () => {
-  const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-  if (!atBottom && followLog) {
-    followLog = false;
-    renderFollowButton();
-  }
-});
-
-async function refresh() {
-  try {
-    const [runResponse, logResponse] = await Promise.all([
-      fetch("/api/runs/" + encodeURIComponent(runID)),
-      fetch("/api/runs/" + encodeURIComponent(runID) + "/log"),
-    ]);
-    if (!runResponse.ok) throw new Error(await runResponse.text());
-    const run = await runResponse.json();
-    latestRun = run;
-    renderRun(run);
-    if (run.status !== "QUEUED" && run.status !== "RUNNING" && timer) {
-      clearInterval(timer);
-      timer = 0;
-    }
-    if (!logResponse.ok) throw new Error(await logResponse.text());
-    const shouldFollow = followLog || logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 8;
-    const fetchedLogText = await logResponse.text();
-    currentLogText = fetchedLogText;
-    const nextLogText = runLogDisplayText(fetchedLogText);
-    if (nextLogText !== renderedLogText) {
-      renderedLogText = nextLogText;
-      logEl.innerHTML = renderLogText(nextLogText);
-      if (shouldFollow) logEl.scrollTop = logEl.scrollHeight;
-    }
-  } catch (error) {
-    showNotice(runStatusEl, t("notice.loadRunFailed", { error: error.message }), "error");
-  }
-}
-
-function renderRun(run) {
-  document.title = run.task_name + " · Builda";
-  titleEl.textContent = run.task_name;
-  runIDEl.textContent = run.id;
-  scriptEl.textContent = run.script;
-  badgeEl.textContent = statusLabel(run.status);
-  badgeEl.className = "badge status-" + escapeHTML(run.status);
-  cancelRunEl.hidden = !isActiveStatus(run.status);
-  requestedEl.textContent = t("time.request") + " " + formatTime(run.requested_at);
-  startedEl.textContent = t("time.start") + " " + formatTime(run.started_at);
-  finishedEl.textContent = t("time.finished") + " " + formatTime(run.finished_at);
-  canceledEl.textContent = t("time.cancelled") + " " + formatTime(run.canceled_at);
-  const paramChips = renderRunParamChips(run.inputs);
-  if (paramChips) {
-    paramsEl.hidden = false;
-    paramsEl.innerHTML = paramChips;
-  } else {
-    paramsEl.hidden = true;
-    paramsEl.innerHTML = "";
-  }
-  renderLogActions(run);
-}
-
-function renderLogActions(run) {
-  deleteRunEl.disabled = !run || isActiveStatus(run.status);
-}
-
-function renderFollowButton() {
-  followLogEl.classList.toggle("active", followLog);
-  followLogEl.setAttribute("aria-pressed", String(followLog));
-  followLogEl.textContent = followLog ? t("action.followOn") : t("action.followOff");
-}
+document.addEventListener("builda:localechange", render);
 
 await initShell();
-document.addEventListener("builda:localechange", () => {
-  if (latestRun) renderRun(latestRun);
-  renderFollowButton();
-});
-renderFollowButton();
-renderLogActions(null);
-await refresh();
-timer = setInterval(refresh, 1000);
+await load();
+setInterval(load, 2000);

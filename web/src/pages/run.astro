@@ -13,31 +13,29 @@ import AppShell from "../layouts/AppShell.astro";
           <div class="param-list" id="params" aria-label="Run parameters" data-i18n-aria-label="params.aria" hidden></div>
         </div>
         <div class="summary-actions">
-          <span class="badge" id="badge" data-i18n="common.loading">로딩 중</span>
-          <button class="danger" id="cancel-run" type="button" hidden data-i18n="action.cancel">취소</button>
+          <span id="badge-host"></span>
+          <button class="secondary compact" id="rerun-run" type="button" data-i18n="action.rerun">다시 실행</button>
+          <button class="secondary compact" id="resolve-run" type="button" hidden data-i18n="action.resolve">정리</button>
+          <button class="danger compact" id="cancel-run" type="button" hidden data-i18n="action.cancel">취소</button>
+          <button class="danger compact" id="delete-run" type="button" hidden data-i18n="action.deleteRun">실행 기록 삭제</button>
         </div>
       </div>
+      <div id="attention" class="attention" hidden></div>
       <details class="script-details">
         <summary data-i18n="script.view">스크립트 보기</summary>
         <code id="script"></code>
       </details>
-      <div class="times">
-        <span id="requested">요청 -</span>
-        <span id="started">시작 -</span>
-        <span id="finished">완료 -</span>
-        <span id="canceled">취소 -</span>
-      </div>
+      <div class="times" id="times"></div>
     </section>
     <section class="log-panel">
       <div class="log-toolbar">
         <h2 data-i18n="log.heading">로그</h2>
         <div class="toolbar">
           <button id="copy-log" class="secondary compact" type="button" data-i18n="action.copyLog">로그 복사</button>
-          <button id="delete-run" class="danger compact" type="button" data-i18n="action.deleteRun">실행 기록 삭제</button>
           <button id="follow-log" class="secondary compact active" type="button" aria-pressed="true">Follow on</button>
         </div>
       </div>
-      <pre id="log" tabindex="0" data-i18n="log.loading">로그를 불러오는 중...</pre>
+      <pre id="log" tabindex="0">로그를 불러오는 중...</pre>
     </section>
   </main>
 

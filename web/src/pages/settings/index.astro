@@ -1,0 +1,51 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Settings · Builda" active="settings">
+  <main class="workspace config-grid">
+    <div id="settings-status" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="page-heading">
+      <div class="page-heading-copy">
+        <p class="eyebrow" data-i18n="settings.eyebrow">관리</p>
+        <h1 data-i18n="settings.title">설정</h1>
+        <p class="lead" data-i18n="settings.lead">문서는 검증을 통과한 뒤에만 적용됩니다.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 data-i18n="settings.apiTokens">API 토큰</h2>
+        </div>
+      </div>
+      <form id="token-form" class="form-inline">
+        <div class="form-row">
+          <label for="token-name" data-i18n="settings.tokenName">토큰 이름</label>
+          <input id="token-name" name="name" type="text" required />
+        </div>
+        <button type="submit" data-i18n="action.create">만들기</button>
+      </form>
+      <div id="token-secret" class="secret-reveal" hidden></div>
+      <div id="tokens" class="record-list"></div>
+    </section>
+
+    <section class="editor-panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 data-i18n="settings.yaml">컨트롤러 YAML</h2>
+          <div class="meta" data-config-path></div>
+        </div>
+        <div class="auth-row">
+          <button id="load-config" class="secondary" type="button" data-i18n="action.load">불러오기</button>
+          <button id="save-config" class="danger" type="button" data-i18n="action.save">저장</button>
+        </div>
+      </div>
+      <textarea id="config-editor" spellcheck="false"></textarea>
+    </section>
+  </main>
+
+  <script>
+    import "../../scripts/settings.js";
+  </script>
+</AppShell>

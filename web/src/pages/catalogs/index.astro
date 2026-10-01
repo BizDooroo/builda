@@ -1,0 +1,54 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Catalogs · Builda" active="catalogs">
+  <main class="workspace">
+    <div id="catalogs-status" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="page-heading">
+      <div class="page-heading-copy">
+        <p class="eyebrow" data-i18n="catalogs.eyebrow">공용 선택 목록</p>
+        <h1 data-i18n="catalogs.title">카탈로그</h1>
+        <p class="lead" data-i18n="catalogs.lead">카탈로그는 재사용 가능한 선택 목록입니다.</p>
+      </div>
+      <div class="toolbar">
+        <button id="new-catalog" type="button" data-i18n="action.newCatalog">카탈로그 추가</button>
+      </div>
+    </section>
+
+    <section id="catalog-editor" class="panel" hidden>
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 id="catalog-editor-title">카탈로그 추가</h2>
+        </div>
+        <div class="toolbar">
+          <button id="close-catalog-editor" class="secondary compact" type="button" data-i18n="action.close">닫기</button>
+        </div>
+      </div>
+      <form id="catalog-form" class="form-grid">
+        <div id="catalog-fields" class="form-grid"></div>
+        <div class="panel-title">
+          <h3 data-i18n="catalogs.options">선택 항목</h3>
+        </div>
+        <div id="catalog-options" class="repeater"></div>
+        <div class="task-actions">
+          <button id="add-option" class="secondary" type="button" data-i18n="action.add">추가</button>
+          <button type="submit" data-i18n="action.save">저장</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 data-i18n="catalogs.title">카탈로그</h2>
+        </div>
+      </div>
+      <div id="catalogs" class="record-list"></div>
+    </section>
+  </main>
+
+  <script>
+    import "../../scripts/catalogs.js";
+  </script>
+</AppShell>

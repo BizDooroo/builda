@@ -30,24 +30,34 @@ func serveHTTP(addrs []string, handler http.Handler) error {
 
 func (a *App) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/config", a.handleConfigPage)
-	mux.HandleFunc("/runs", a.handleRunsPage)
-	mux.HandleFunc("/runs/", a.handleRunPage)
 	mux.HandleFunc("/api/meta", a.handleMeta)
 	mux.HandleFunc("/api/state", a.handleState)
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/tasks/start", a.handleStart)
 	mux.HandleFunc("/api/tasks/", a.handleTaskAPI)
 	mux.HandleFunc("/api/runs/", a.handleRunAPI)
-	mux.HandleFunc("/", a.handleIndex)
+	mux.HandleFunc("/", a.handleLegacyPage)
 	return mux
 }
-func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" {
-		serveWebFile(w, r, "index.html")
+
+// legacyUINotice explains why the standalone role has no Web UI. The bundled
+// UI belongs to the controller and talks to controller APIs that this role
+// does not serve, so serving it here would only produce broken pages.
+const legacyUINotice = `The standalone Builda role no longer ships a Web UI.
+
+Its JSON API under /api is still served so an existing installation can keep
+running while its history is migrated. Run "builda controller serve" for the
+Web UI, and see "builda migrate --help" to move this installation over.
+`
+
+func (a *App) handleLegacyPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	serveWebFile(w, r, strings.TrimPrefix(r.URL.Path, "/"))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusGone)
+	_, _ = w.Write([]byte(legacyUINotice))
 }
 
 func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -76,40 +86,6 @@ func (a *App) handleMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.RUnlock()
 	respondJSON(w, payload)
-}
-
-func (a *App) handleRunsPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/runs" {
-		http.NotFound(w, r)
-		return
-	}
-	serveWebFile(w, r, "runs/index.html")
-}
-
-func (a *App) handleRunPage(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/runs/"), "/")
-	if id == "" || strings.Contains(id, "/") {
-		http.NotFound(w, r)
-		return
-	}
-	_, ok := a.runner.Find(id)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	serveWebFile(w, r, "run/index.html")
-}
-
-func (a *App) handleConfigPage(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/config" {
-		http.NotFound(w, r)
-		return
-	}
-	if !a.configEditingEnabled() {
-		http.NotFound(w, r)
-		return
-	}
-	serveWebFile(w, r, "config/index.html")
 }
 
 func (a *App) handleState(w http.ResponseWriter, r *http.Request) {

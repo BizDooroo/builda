@@ -134,33 +134,32 @@ tasks:
 	}
 }
 
-func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
+func TestStandaloneRoleServesNoWebUI(t *testing.T) {
 	app := &App{
 		cfg:      Config{},
 		hostname: "test-host",
 		started:  time.Unix(0, 0),
 	}
+	handler := app.routes()
 
+	for _, path := range []string{"/", "/runs", "/runs/abc", "/config", "/index.html"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusGone {
+			t.Fatalf("expected %s to report the UI as gone, got %d", path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "builda controller serve") {
+			t.Fatalf("expected %s to point at the controller role, got:\n%s", path, rec.Body.String())
+		}
+	}
+
+	// The JSON API stays available so an installation can keep running while
+	// its history is migrated.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	app.handleIndex(rec, req)
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/meta", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected the standalone API to stay available, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `data-config-link hidden`) {
-		t.Fatalf("expected static config link to start hidden, got:\n%s", rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/config", nil)
-	app.handleConfigPage(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected config page to be hidden without password, got %d", rec.Code)
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/meta", nil)
-	app.handleMeta(rec, req)
 	var meta struct {
 		ConfigEditingEnabled bool `json:"config_editing_enabled"`
 	}
@@ -168,34 +167,9 @@ func TestConfigPageHiddenWhenWebPasswordMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if meta.ConfigEditingEnabled {
-		t.Fatalf("expected meta to report disabled config editing")
-	}
-
-	app.cfg.Server.ConfigPassword = "secret"
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/config", nil)
-	app.handleConfigPage(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected config page with password, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), `type="password"`) {
-		t.Fatalf("expected password input on config page, got:\n%s", rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/meta", nil)
-	app.handleMeta(rec, req)
-	meta = struct {
-		ConfigEditingEnabled bool `json:"config_editing_enabled"`
-	}{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
-		t.Fatal(err)
-	}
-	if !meta.ConfigEditingEnabled {
-		t.Fatalf("expected meta to report enabled config editing")
+		t.Fatal("expected meta to report disabled config editing")
 	}
 }
-
 func TestMetaIncludesBuildVersionDetails(t *testing.T) {
 	oldVersion, oldCommit, oldDate := version, commit, date
 	t.Cleanup(func() {

@@ -5,117 +5,116 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestRunsPageRendersWorkspace(t *testing.T) {
-	app := &App{
-		logDir:   "logs",
-		hostname: "test-host",
-		started:  time.Unix(0, 0),
+// servePage fetches one UI route as an authenticated browser.
+func servePage(t *testing.T, api *ControllerAPI, session *Session, path string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.ID})
+	recorder := httptest.NewRecorder()
+	api.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s returned %d: %s", path, recorder.Code, recorder.Body.String())
 	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/runs?task=hello", nil)
-	app.handleRunsPage(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected runs page to render, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if strings.Contains(body, `data-server-meta`) {
-		t.Fatalf("expected runs page not to render server meta hook, got:\n%s", body)
-	}
-	if !strings.Contains(body, `id="run-picker"`) {
-		t.Fatalf("expected runs page to render mobile picker, got:\n%s", body)
-	}
-	assertEmbeddedWebContains(t, "/api/state?task=")
-	assertEmbeddedWebContains(t, "param-chip")
-	assertEmbeddedWebContains(t, "log-param-line")
-	assertEmbeddedWebContains(t, "time.duration")
-	assertEmbeddedWebContains(t, "data-theme-toggle")
-	assertEmbeddedWebContains(t, "data-locale-toggle")
-	assertEmbeddedWebContains(t, "data-build-id")
-	assertEmbeddedWebContains(t, "delete-run")
+	return recorder.Body.String()
 }
 
-func TestRunPageRendersParamsHeaderHook(t *testing.T) {
-	run := &Run{
-		ID:       "run-with-inputs",
-		TaskID:   "deploy",
-		TaskName: "Deploy",
-		Script:   "echo deploy",
-		Inputs: map[string]string{
-			"target": "prod",
-		},
-		Status:   StatusSuccess,
-		ExitCode: 0,
-	}
-	runner := &Runner{
-		byID: map[string]*Run{
-			run.ID: run,
-		},
-	}
-	app := &App{
-		runner:   runner,
-		hostname: "test-host",
-	}
+// TestControllerPagesAreServedForEveryRoute proves every management route maps
+// to a prebuilt document in the embedded dist.
+func TestControllerPagesAreServedForEveryRoute(t *testing.T) {
+	api, controller := newTestAPI(t, testControllerConfig)
+	session := adminSession(t, api)
+	markOnline(controller, "mac-one")
+	execution := enqueue(t, controller, "ios-build", map[string]string{"project": "alpha"})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/runs/"+run.ID, nil)
-	app.handleRunPage(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected run page to render, got %d: %s", rec.Code, rec.Body.String())
+	cases := map[string][]string{
+		"/":                     {`id="jobs"`, `id="job-editor"`, `id="run-modal"`, "/_astro/jobs.js"},
+		"/jobs":                 {`id="jobs"`},
+		"/catalogs":             {`id="catalogs"`, `id="catalog-options"`},
+		"/agents":               {`id="agents"`, `id="agent-secret"`},
+		"/queue":                {`id="queue"`, `id="cancel-selected"`, `id="active"`},
+		"/runs":                 {`id="run-filters"`, `id="runs"`, `id="log"`},
+		"/runs/" + execution.ID: {`id="badge-host"`, `id="rerun-run"`, `id="log"`},
+		"/settings":             {`id="config-editor"`, `id="token-form"`},
 	}
-	body := rec.Body.String()
-	for _, expected := range []string{
-		`id="params"`,
-	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("expected run page to include %q, got:\n%s", expected, body)
+	for path, wanted := range cases {
+		body := servePage(t, api, session, path)
+		for _, needle := range wanted {
+			if !strings.Contains(body, needle) {
+				t.Fatalf("%s should contain %q", path, needle)
+			}
 		}
 	}
-	assertEmbeddedWebContains(t, "param-list")
-	assertEmbeddedWebContains(t, "param-chip")
-	assertEmbeddedWebContains(t, "/api/runs/")
-
-	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/runs/missing", nil)
-	app.handleRunPage(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected missing run page to 404, got %d", rec.Code)
+	// An unknown route is still a 404 for an authenticated user.
+	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session.ID})
+	recorder := httptest.NewRecorder()
+	api.routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected an unknown route to 404, got %d", recorder.Code)
 	}
 }
 
-func TestIndexPageKeepsCollapsedTaskDescriptionOnOneLine(t *testing.T) {
-	app := &App{
-		logDir:   "logs",
-		hostname: "test-host",
-		started:  time.Unix(0, 0),
-	}
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	app.handleIndex(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected index page to render, got %d: %s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	for _, expected := range []string{
-		"id=\"run-modal\"",
-	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("expected index page to include %q, got:\n%s", expected, body)
+// TestLoginPageIsReachableWithoutASession keeps the sign-in page and its
+// assets outside the authenticated surface.
+func TestLoginPageIsReachableWithoutASession(t *testing.T) {
+	api, _ := newTestAPI(t, testControllerConfig)
+	for _, path := range []string{"/login", "/favicon.svg"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		recorder := httptest.NewRecorder()
+		api.routes().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s returned %d for an anonymous caller", path, recorder.Code)
 		}
 	}
-	for _, expected := range []string{
-		"text-overflow:ellipsis",
-		"grid-template-columns:minmax(0,1fr) auto",
-		"task-description-full",
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	recorder := httptest.NewRecorder()
+	api.routes().ServeHTTP(recorder, req)
+	body := recorder.Body.String()
+	for _, needle := range []string{`id="login-form"`, `name="password"`, "/_astro/login.js"} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("the login page should contain %q", needle)
+		}
+	}
+	if strings.Contains(body, "data-logout") {
+		t.Fatal("the login page must not render the authenticated chrome")
+	}
+}
+
+// TestEmbeddedUICoversTheControllerAPI pins the behaviour the shipped bundle
+// has to keep: it talks to the controller API, carries the CSRF header, keeps
+// the insecure-context copy fallback, and only repaints a log when the text
+// changes so a completed log stays selectable.
+func TestEmbeddedUICoversTheControllerAPI(t *testing.T) {
+	for _, needle := range []string{
+		"/api/jobs",
+		"/api/catalogs",
+		"/api/agents",
+		"/api/queue",
+		"/api/runs",
+		"/api/tokens",
+		"/api/login",
+		"/api/logout",
+		"X-Builda-CSRF",
+		"X-Builda-Log-Offset",
 		"document.execCommand",
 		"window.isSecureContext",
-		"/api/tasks/",
-		"BUILDA_INPUT_",
+		"BUILDA_PARAM_",
+		"param-chip",
+		"log-param-line",
+		"data-theme-toggle",
+		"data-locale-toggle",
+		"data-build-id",
 	} {
-		assertEmbeddedWebContains(t, expected)
+		assertEmbeddedWebContains(t, needle)
+	}
+}
+
+// TestEmbeddedUIDropsTheStandaloneSurface makes sure the controller UI never
+// ships calls to the removed standalone task API.
+func TestEmbeddedUIDropsTheStandaloneSurface(t *testing.T) {
+	for _, needle := range []string{"/api/tasks/", "/api/state?task=", "BUILDA_INPUT_"} {
+		assertEmbeddedWebLacks(t, needle)
 	}
 }

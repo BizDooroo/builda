@@ -1,0 +1,51 @@
+---
+import AppShell from "../../layouts/AppShell.astro";
+---
+
+<AppShell title="Agents · Builda" active="agents">
+  <main class="workspace">
+    <div id="agents-status" class="notice" role="status" aria-live="polite" hidden></div>
+    <section class="page-heading">
+      <div class="page-heading-copy">
+        <p class="eyebrow" data-i18n="agents.eyebrow">에이전트 묶음</p>
+        <h1 data-i18n="agents.title">에이전트</h1>
+        <p class="lead" data-i18n="agents.lead">라벨과 등록 토큰은 컨트롤러가 소유합니다.</p>
+      </div>
+      <div class="toolbar">
+        <button id="new-agent" type="button" data-i18n="action.newAgent">에이전트 추가</button>
+      </div>
+    </section>
+
+    <div id="agent-secret" class="secret-reveal" hidden></div>
+
+    <section id="agent-editor" class="panel" hidden>
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 id="agent-editor-title">에이전트 추가</h2>
+        </div>
+        <div class="toolbar">
+          <button id="close-agent-editor" class="secondary compact" type="button" data-i18n="action.close">닫기</button>
+        </div>
+      </div>
+      <form id="agent-form" class="form-grid">
+        <div id="agent-fields" class="form-grid"></div>
+        <div class="task-actions">
+          <button type="submit" data-i18n="action.save">저장</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="panel-title">
+          <h2 data-i18n="agents.title">에이전트</h2>
+        </div>
+      </div>
+      <div id="agents" class="record-list"></div>
+    </section>
+  </main>
+
+  <script>
+    import "../../scripts/agents.js";
+  </script>
+</AppShell>
