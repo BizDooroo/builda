@@ -28,6 +28,7 @@
 
 ## Recovery
 - A controller restart must not abort running work, and must not reassign an execution whose start permit was granted. Requeue only an assignment that provably never started.
+- A stopping agent must not block until a long build finishes. It stops supervising, leaves the script running in its own process group, reports nothing it does not know, and lets the next start reconcile the run.
 - An agent restart must never re-execute an incomplete run. Prove the process group ended and report `ABORTED`, or block the execution for operator attention. Never kill a process whose ownership cannot be proven, and never accept new work while blocked.
 - Logs are written to the agent disk first and uploaded at byte offsets. Duplicate chunks are idempotent, a gap is refused with the durable offset, and a result is confirmed only once the controller holds every byte. The log file length is the durable record and is re-read on restart.
 - A job that exceeds its timeout is reported as `FAILED` with the failure reason `timeout`.

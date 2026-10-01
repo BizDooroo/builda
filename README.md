@@ -95,6 +95,7 @@ QUEUED -> ASSIGNED -> RUNNING -> SUCCESS | FAILED | CANCELED | ABORTED
 ## Recovery
 
 - **Controller restart.** Queues and assignments are restored from the snapshot. Running work is not aborted. Every agent counts as offline until it polls again, so nothing is reassigned on a stale view.
+- **Agent shutdown.** Stopping an agent does not wait for a long build. It stops supervising, reports nothing it cannot know, and leaves the script running in its own process group for the next start to reconcile.
 - **Agent restart.** An incomplete run is never re-executed. The agent proves the process group it started has ended and reports `ABORTED`, or, if ownership or termination cannot be proven, it blocks that execution for operator attention instead of killing a process it cannot prove it owns or accepting more work. Resolve such a run from the UI or with `POST /api/runs/{id}/resolve`.
 - **Logs.** An agent writes its log to disk first and uploads it at byte offsets. Duplicate chunks are idempotent, a gap is refused with the durable offset so the agent retransmits, and a result is only confirmed once the controller holds every log byte. The agent keeps its local log and result until the controller acknowledges both.
 - **Persistence.** Run and assignment state live in one JSON snapshot written atomically with mode `0600`. Every mutation fails closed: if the snapshot cannot be written, the enqueue, assignment, or start is not acknowledged.

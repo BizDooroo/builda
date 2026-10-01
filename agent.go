@@ -149,6 +149,11 @@ func (a *Agent) runAssignment(ctx context.Context, entry *journalEntry) {
 	stopUpload()
 	uploader.Wait()
 
+	if outcome.Status == execAbandoned {
+		log.Printf("agent is shutting down; execution %s keeps running and is reconciled on the next start", entry.ExecutionID)
+		return
+	}
+
 	entry.Phase = journalFinished
 	entry.Status = outcome.Status
 	entry.ExitCode = outcome.ExitCode

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestEndToEndSuccessfulRun runs a synthetic script on a real agent and checks
@@ -401,4 +402,55 @@ echo released`
 	if statusOf(t, controller, queued.ID) != StatusQueued {
 		t.Fatal("the queued execution must still be waiting on the pause")
 	}
+}
+
+// TestAgentShutdownDoesNotWaitForALongBuild proves a stopping agent returns
+// promptly instead of blocking until the script finishes. The run is left for
+// the next start to reconcile, which is what the recovery path expects.
+func TestAgentShutdownDoesNotWaitForALongBuild(t *testing.T) {
+	controller, _, agents := newTestFleet(t, scriptedConfig("sleep 120", "10m"), "linux-one")
+	harness := agents["linux-one"]
+	harness.start(t)
+
+	execution := enqueue(t, controller, "android-build", map[string]string{"project": "alpha"})
+	waitFor(t, "the agent to launch the script", func() bool {
+		if statusOf(t, controller, execution.ID) != StatusRunning {
+			return false
+		}
+		entry, err := harness.agent.journal.Load(execution.ID)
+		return err == nil && entry.Phase == journalStarted && entry.PGID > 0
+	})
+
+	started := time.Now()
+	harness.stop()
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("the agent took %s to stop; it must not wait for the build", elapsed)
+	}
+	// The controller still sees the run as live: nothing was invented.
+	if statusOf(t, controller, execution.ID) != StatusRunning {
+		t.Fatal("a stopping agent must not report an outcome it does not know")
+	}
+	// The journal still records the started phase, so the next start can
+	// reconcile it.
+	entries, err := harness.agent.journal.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Phase != journalStarted {
+		phases := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			phases = append(phases, entry.ExecutionID+"="+entry.Phase)
+		}
+		t.Fatalf("expected one started journal entry, got %v", phases)
+	}
+
+	// Restarting proves the process group is cleaned up and reported once.
+	harness.restart(t)
+	waitFor(t, "the restarted agent to report the aborted run", func() bool {
+		return statusOf(t, controller, execution.ID) == StatusAborted
+	})
+	waitFor(t, "the process group to be gone", func() bool {
+		exists, err := processGroupExists(entries[0].PGID)
+		return err == nil && !exists
+	})
 }

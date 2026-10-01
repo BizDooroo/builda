@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+// execAbandoned marks a run the agent stopped supervising because it is
+// shutting down. It is never reported to the controller and never persisted:
+// the script keeps running in its own process group and the next agent start
+// reconciles it.
+const execAbandoned = "ABANDONED-BY-SHUTDOWN"
+
 // execOutcome is the local result of running one job script.
 type execOutcome struct {
 	Status        string
@@ -136,6 +142,11 @@ func (a *Agent) runExecution(ctx context.Context, entry *journalEntry, cancel <-
 	}
 
 	outcome := a.superviseExecution(ctx, cmd, entry, writer, stdout, stderr, cancel)
+	if outcome.Status == execAbandoned {
+		writeLog(writer, "agent", "stopped supervising this run because the agent is shutting down")
+		_ = logFile.Sync()
+		return outcome
+	}
 	writeLog(writer, "finished", time.Now().Format(displayTimeLayout))
 	writeLog(writer, "result", fmt.Sprintf("%s exit=%d %s", outcome.Status, outcome.ExitCode, outcome.Error))
 	if syncErr := logFile.Sync(); syncErr != nil {
@@ -185,8 +196,22 @@ func (a *Agent) superviseExecution(ctx context.Context, cmd *exec.Cmd, entry *jo
 
 	// Drain both pipes to EOF before reaping: cmd.Wait closes them, so
 	// waiting first would truncate the tail of the log.
-	copyWG.Wait()
-	waitErr := cmd.Wait()
+	reaped := make(chan error, 1)
+	go func() {
+		copyWG.Wait()
+		reaped <- cmd.Wait()
+	}()
+
+	var waitErr error
+	select {
+	case waitErr = <-reaped:
+	case <-ctx.Done():
+		// Shutting down. Stop supervising instead of blocking until a long
+		// build finishes; the script survives in its own process group and the
+		// next agent start reconciles it.
+		close(done)
+		return execOutcome{Status: execAbandoned, ExitCode: -1}
+	}
 	close(done)
 
 	outcome := execOutcome{ExitCode: -1}
