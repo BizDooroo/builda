@@ -48,6 +48,11 @@ func (c *Controller) Enqueue(jobID string, values url.Values, requestedBy string
 		RequestedAt:     time.Now(),
 	}
 	if err := c.store.mutate(func(st *controllerStateData) error {
+		// Execution IDs are random, but uniqueness is a correctness property
+		// rather than a probability, so it is enforced here.
+		for st.find(execution.ID) != nil {
+			execution.ID = newExecutionID()
+		}
 		st.Executions = append(st.Executions, execution.clone())
 		return nil
 	}); err != nil {

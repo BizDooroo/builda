@@ -95,6 +95,9 @@ func importBundle(controller *Controller, bundle *MigrationBundle, mapping *Migr
 	// the controller state is untouched.
 	if err := controller.store.mutate(func(st *controllerStateData) error {
 		for _, execution := range pending {
+			for st.find(execution.ID) != nil {
+				execution.ID = newExecutionID()
+			}
 			st.Executions = append(st.Executions, execution.clone())
 		}
 		return nil

@@ -451,3 +451,37 @@ func TestConfigEditRejectsAWriteRacedByTheFile(t *testing.T) {
 		t.Fatal("the refused edit must not reach the file")
 	}
 }
+
+// TestExecutionIDsAreUnique treats uniqueness as a property rather than a
+// probability: an enqueue that collides with an existing ID picks another.
+func TestExecutionIDsAreUnique(t *testing.T) {
+	controller := newTestController(t, testControllerConfig)
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		execution := enqueue(t, controller, "ios-build", map[string]string{"project": "alpha"})
+		if seen[execution.ID] {
+			t.Fatalf("duplicate execution id %q", execution.ID)
+		}
+		seen[execution.ID] = true
+	}
+
+	// Force a collision: an execution already holding the next generated ID
+	// must not be overwritten.
+	existing := enqueue(t, controller, "ios-build", map[string]string{"project": "alpha"})
+	collision := &Execution{ID: existing.ID, JobID: "ios-build", Status: StatusSuccess, RequestedAt: time.Now()}
+	if err := controller.store.mutate(func(st *controllerStateData) error {
+		for st.find(collision.ID) != nil {
+			collision.ID = newExecutionID()
+		}
+		st.Executions = append(st.Executions, collision.clone())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if collision.ID == existing.ID {
+		t.Fatal("a colliding id must be replaced")
+	}
+	if _, ok := controller.store.Find(existing.ID); !ok {
+		t.Fatal("the original execution must survive")
+	}
+}
