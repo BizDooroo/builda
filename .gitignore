@@ -28,3 +28,4 @@ gitleaks-report.*
 # Local scratch files
 tmp/
 *.tmp
+/todo-web.md
