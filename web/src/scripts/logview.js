@@ -51,13 +51,14 @@ export class LogView {
       this.pre.dataset.wrap = this.wrap ? "on" : "off";
       this.renderControls();
     });
-    this.pre?.addEventListener("scroll", () => {
-      const atEnd = this.pre.scrollHeight - this.pre.scrollTop - this.pre.clientHeight < 24;
+    window.addEventListener("scroll", () => {
+      const scrollRoot = document.scrollingElement || document.documentElement;
+      const atEnd = scrollRoot.scrollHeight - scrollRoot.scrollTop - window.innerHeight < 24;
       if (this.follow && !atEnd) {
         this.follow = false;
         this.renderFollowButton();
       }
-    });
+    }, { passive: true });
     this.renderControls();
   }
 
@@ -150,6 +151,7 @@ export class LogView {
   }
 
   scrollToEnd() {
-    this.pre.scrollTop = this.pre.scrollHeight;
+    const scrollRoot = document.scrollingElement || document.documentElement;
+    window.scrollTo({ top: scrollRoot.scrollHeight, left: 0, behavior: "instant" });
   }
 }

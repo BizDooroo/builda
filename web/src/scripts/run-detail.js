@@ -26,6 +26,7 @@ const logView = new LogView({
   pre: document.getElementById("log"),
   copyButton: document.getElementById("copy-log"),
   followButton: document.getElementById("follow-log"),
+  wrapButton: document.getElementById("wrap-log"),
   notice,
 });
 logView.select(runID);

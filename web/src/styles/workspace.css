@@ -158,9 +158,10 @@ main.runs-workspace {
 
 pre {
   margin: 0;
-  height: clamp(200px, calc(100dvh - 430px), 600px);
   min-height: 200px;
-  overflow: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
   padding: 16px;
   background: var(--log-bg);
   color: var(--log-fg);
@@ -168,8 +169,6 @@ pre {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
   tab-size: 2;
 }
 
@@ -179,10 +178,13 @@ pre[data-wrap="off"] {
   overflow-x: auto;
 }
 
+pre[data-wrap="off"] .log-line {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
 pre[data-empty="true"] {
-  height: auto;
   min-height: 88px;
-  max-height: 160px;
   white-space: normal;
 }
 
@@ -273,11 +275,6 @@ pre *::selection {
     position: static;
   }
 
-  pre {
-    height: clamp(260px, 58svh, 600px);
-    min-height: 240px;
-  }
-
   .auth-row {
     align-items: stretch;
     flex-direction: column;
@@ -330,16 +327,5 @@ pre *::selection {
   .log-toolbar {
     align-items: flex-start;
     flex-wrap: wrap;
-  }
-}
-
-@media (max-height: 760px) and (min-width: 961px) {
-  .inspector {
-    position: static;
-  }
-
-  pre {
-    height: clamp(180px, calc(100dvh - 460px), 300px);
-    min-height: 180px;
   }
 }

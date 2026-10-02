@@ -49,4 +49,5 @@
 - Give every shared script module its own output chunk. Letting the bundler merge shared modules makes the generated export order vary between builds and breaks the CI comparison against the committed dist.
 - Management screens are dedicated forms, not a raw YAML box. Keep the validated YAML editor as an escape hatch on the settings page.
 - Do not replace rendered log DOM during polling unless the displayed log text or the selected run changes, and keep the log element out of the translation pass, or a selection is lost on every tick.
+- Pass every rendered log control, including wrap, into each page's `LogView` instance so visible controls remain connected on both history and run detail screens.
 - Send only the fields an API accepts. The config APIs reject unknown fields, so never post a list or detail view object straight back.
